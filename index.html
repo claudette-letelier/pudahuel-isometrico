@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pudahuel Isométrica</title>
+  <meta name="description" content="Mapa isométrico de la comuna de Pudahuel: municipios, juzgados, parroquias, metro y el aeropuerto, sin base de datos.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect fill='%231a2330' width='32' height='32' rx='4'/%3E%3Cpath fill='%23c4553a' d='M16 5 27 11v10L16 27 5 21V11z'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,560;1,9..144,500&family=Outfit:wght@380;500;640&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="panel">
+      <header class="brand">
+        <p class="eyebrow">Comuna de Pudahuel</p>
+        <h1>Pudahuel <em>Isométrica</em></h1>
+        <p class="lede">Las Barrancas · 1897 · poniente de Santiago</p>
+      </header>
+
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab is-on" role="tab" aria-selected="true" data-tab="lugares">Lugares</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="recorridos">Recorridos</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-tab="acerca">Acerca</button>
+        <button type="button" id="fold" class="fold" aria-label="Plegar panel">▴</button>
+      </div>
+
+      <div class="sheet" id="sheet">
+        <section id="view-lugares" role="tabpanel">
+          <label class="search">
+            <span class="sr">Buscar un lugar</span>
+            <input id="q" type="search" placeholder="Buscar: juzgado, parroquia, metro…" autocomplete="off">
+          </label>
+          <div id="layers"></div>
+        </section>
+
+        <section id="view-recorridos" role="tabpanel" hidden>
+          <div id="tours"></div>
+        </section>
+
+        <section id="view-acerca" role="tabpanel" hidden>
+          <div class="prose">
+            <h2>Una maqueta para recorrer la comuna</h2>
+            <p>Pudahuel Isométrica es un mapa estático, en perspectiva isométrica, de la comuna de Pudahuel. Sirve para ubicar instituciones y lugares de memoria sin instalar nada y sin una base de datos: todo está en archivos de este sitio.</p>
+            <p>La comuna nació el 25 de febrero de 1897 como Las Barrancas, sobre el antiguo camino a Valparaíso. En 1975 tomó el nombre de Pudahuel. En 1981 se separaron Cerro Navia y Lo Prado.</p>
+            <h2>De dónde salen los datos</h2>
+            <ul>
+              <li>Calles, parques, agua, vía férrea, aeropuerto y huellas de edificios: © colaboradores de OpenStreetMap, licencia ODbL. El límite comunal es el de ese mismo mapa.</li>
+              <li>Alturas: si OpenStreetMap trae metros o pisos, se usan. El resto es una estimación según el tipo de edificio. No son las casas medidas una a una.</li>
+              <li>Fichas cívicas: Municipalidad de Pudahuel, directorio de Juzgados de Policía Local del SERNAC, directorio de notarías y el Plan Municipal de Cultura 2024-2027.</li>
+            </ul>
+            <h2>Qué no está en el mapa</h2>
+            <p>Los juzgados de garantía, los tribunales de familia, la fiscalía y el Conservador de Bienes Raíces que atienden a vecinos de Pudahuel funcionan fuera de la comuna. Por eso no aparecen como puntos locales. Tampoco hay relieve medido: el suelo es plano.</p>
+            <h2>Controles</h2>
+            <ul>
+              <li>Arrastrar para mover. La rueda o un pellizco acercan.</li>
+              <li>Flechas para mover, + y − para el zoom, Q y E para girar la maqueta.</li>
+              <li>Cada lugar tiene enlace propio: la dirección termina en <code>#juzgados</code>, por ejemplo.</li>
+            </ul>
+            <p class="fine">Proyecto de exploración comunal. Si una ficha está mal, el dato se corrige en <code>data/places.json</code>.</p>
+          </div>
+        </section>
+      </div>
+
+      <article id="card" hidden>
+        <button type="button" id="card-close" aria-label="Cerrar ficha">×</button>
+        <p id="card-kicker"></p>
+        <h2 id="card-title"></h2>
+        <p id="card-address"></p>
+        <p id="card-summary"></p>
+        <p id="card-source"></p>
+      </article>
+    </aside>
+
+    <main>
+      <canvas id="map" aria-label="Mapa isométrico de Pudahuel"></canvas>
+      <div class="tools" aria-label="Controles del mapa">
+        <button type="button" id="north" title="Volver al norte" aria-label="Brújula, volver al norte">N</button>
+        <button type="button" id="zoom-in" title="Acercar" aria-label="Acercar">+</button>
+        <button type="button" id="zoom-out" title="Alejar" aria-label="Alejar">−</button>
+        <button type="button" id="rot-l" title="Girar a la izquierda" aria-label="Girar vista a la izquierda">↺</button>
+        <button type="button" id="rot-r" title="Girar a la derecha" aria-label="Girar vista a la derecha">↻</button>
+        <button type="button" id="night" title="Vista nocturna" aria-label="Vista nocturna" aria-pressed="false">☾</button>
+        <button type="button" id="labels" title="Nombres de calles" aria-label="Mostrar nombres de calles" aria-pressed="true">Aa</button>
+      </div>
+      <p id="status">Preparando la maqueta…</p>
+      <p id="scale"></p>
+    </main>
+  </div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
