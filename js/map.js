@@ -352,7 +352,7 @@ export class IsoMap {
   }
 
   _build(city) {
-    for (const mesh of [this.terrain, this.edge, this.ground, this.waterMesh, this.buildings]) {
+    for (const mesh of [this.terrain, this.edge, this.ground, this.waterMesh, this.buildings, this.trees]) {
       if (!mesh) continue;
       this.scene.remove(mesh);
       mesh.geometry.dispose();
@@ -390,7 +390,6 @@ export class IsoMap {
     for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
     for (const ring of city.water || []) this._drape(water, ring, blue, 0.22);
     for (const line of city.waterways || []) this._ribbon(water, line, 6, blue, 0.3);
-    this._plant(ground, city.trees || []);
     this.edge = this._edgeWall(city.boundary);
 
     for (const building of city.buildings || []) {
@@ -419,7 +418,9 @@ export class IsoMap {
     this.buildings = built.mesh(windowMaterial(this.uni));
     this.buildings.castShadow = true;
     this.buildings.receiveShadow = true;
+    this.trees = this._treeField(city.trees || []);
     this.scene.add(this.terrain, this.edge, this.ground, this.waterMesh, this.buildings);
+    if (this.trees) this.scene.add(this.trees);
   }
 
   _soil(height) {
@@ -484,20 +485,23 @@ export class IsoMap {
         } else if (flag === 2) {
           const x0 = o[0] + i * s;
           const y0 = o[1] + j * s;
-          const clipped = clipToRect(ring, x0, y0, x0 + s, y0 + s);
-          if (clipped.length < 3) continue;
-          let faces = [];
-          try {
-            faces = THREE.ShapeUtils.triangulateShape(clipped.map(([x, y]) => new THREE.Vector2(x, y)), []);
-          } catch {
-            continue;
-          }
-          const verts = clipped.map(([x, y]) => {
-            const height = this._height(x, y);
-            return [x, height, -y, this._soil(height)];
-          });
-          for (const [a, b, c] of faces) {
-            rim.up(verts[a].slice(0, 3), verts[b].slice(0, 3), verts[c].slice(0, 3), verts[a].slice(3));
+          const parts = 4;
+          const step = s / parts;
+          for (let v = 0; v < parts; v += 1) {
+            for (let u = 0; u < parts; u += 1) {
+              const cx = x0 + (u + 0.5) * step;
+              const cy = y0 + (v + 0.5) * step;
+              if (!this._inRing(cx, cy)) continue;
+              const quad = [
+                [x0 + u * step, y0 + v * step],
+                [x0 + (u + 1) * step, y0 + v * step],
+                [x0 + (u + 1) * step, y0 + (v + 1) * step],
+                [x0 + u * step, y0 + (v + 1) * step],
+              ].map(([x, y]) => [x, this._height(x, y), -y]);
+              const tone = this._soil(this._height(cx, cy));
+              rim.up(quad[0], quad[1], quad[2], tone);
+              rim.up(quad[0], quad[2], quad[3], tone);
+            }
           }
         }
       }
@@ -565,6 +569,16 @@ export class IsoMap {
         band(base + 16, base + 16, ha - 3.5, hb - 3.5, soil);
         band(base + 7, base + 7, base + 16, base + 16, stratum);
         band(base, base, base + 7, base + 7, soil);
+        const len = Math.hypot(dx, dy) || 1;
+        const ix = (-dy / len) * 36;
+        const iy = (dx / len) * 36;
+        const cap = this._soil((ha + hb) / 2);
+        const c0 = [a[0], ha + 0.25, -a[1]];
+        const c1 = [b[0], hb + 0.25, -b[1]];
+        const c2 = [b[0] + ix, this._height(b[0] + ix, b[1] + iy) + 0.25, -(b[1] + iy)];
+        const c3 = [a[0] + ix, this._height(a[0] + ix, a[1] + iy) + 0.25, -(a[1] + iy)];
+        wall.up(c0, c1, c2, cap);
+        wall.up(c0, c2, c3, cap);
       }
     }
     const mesh = wall.mesh(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
@@ -572,26 +586,51 @@ export class IsoMap {
     return mesh;
   }
 
-  _plant(bucket, trees) {
-    const leaf = [
-      [0.24, 0.38, 0.18],
-      [0.4, 0.46, 0.22],
-      [0.32, 0.48, 0.2],
-      [0.28, 0.46, 0.24],
-    ];
-    for (const [x, y, kind] of trees) {
-      const height = this._height(x, y);
-      const crown = kind === 1 ? 4.2 : kind === 2 ? 5.5 : 8;
-      const radius = kind === 1 ? 2.2 : kind === 2 ? 2.4 : 3.4;
-      const color = leaf[kind] || leaf[0];
-      const tip = [x, height + crown, -y];
-      const base = [];
-      for (let i = 0; i < 4; i += 1) {
-        const angle = (i * Math.PI) / 2 + 0.4;
-        base.push([x + Math.cos(angle) * radius, height + crown * 0.28, -(y + Math.sin(angle) * radius)]);
-      }
-      for (let i = 0; i < 4; i += 1) bucket.tri(base[i], base[(i + 1) % 4], tip, color);
+  _treeField(trees) {
+    if (!trees.length) return null;
+    const geometry = roundTreeGeometry();
+    const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const mesh = new THREE.InstancedMesh(geometry, material, trees.length);
+    const dummy = new THREE.Object3D();
+    for (let i = 0; i < trees.length; i += 1) {
+      const [x, y, kind] = trees[i];
+      const spin = ((Math.abs(x * 12.9898 + y * 78.233) % 1) + 1) % 1;
+      const scale = (kind === 1 ? 0.55 : kind === 2 ? 0.78 : 1) * (0.82 + spin * 0.36);
+      dummy.position.set(x, this._height(x, y), -y);
+      dummy.rotation.set(0, spin * Math.PI * 2, 0);
+      dummy.scale.set(scale, scale * (kind === 0 ? 1.12 : 0.92 + spin * 0.2), scale);
+      dummy.updateMatrix();
+      mesh.setMatrixAt(i, dummy.matrix);
     }
+    mesh.instanceMatrix.needsUpdate = true;
+    return mesh;
+  }
+
+  _onRoad(point) {
+    if (this._inRing(point[0], point[1])) return true;
+    return (
+      this._inRing(point[0] + 20, point[1]) ||
+      this._inRing(point[0] - 20, point[1]) ||
+      this._inRing(point[0], point[1] + 20) ||
+      this._inRing(point[0], point[1] - 20)
+    );
+  }
+
+  _roadSpan(a, b) {
+    const left = this._onRoad(a);
+    const right = this._onRoad(b);
+    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    if (left && right && this._onRoad(mid)) return [a, b];
+    if (!left && !right) return null;
+    if (left && right) return null;
+    let inside = left ? a : b;
+    let outside = left ? b : a;
+    for (let step = 0; step < 10; step += 1) {
+      const middle = [(inside[0] + outside[0]) / 2, (inside[1] + outside[1]) / 2];
+      if (this._onRoad(middle)) inside = middle;
+      else outside = middle;
+    }
+    return left ? [a, inside] : [inside, b];
   }
 
   _drape(bucket, ring, color, lift) {
@@ -609,26 +648,23 @@ export class IsoMap {
 
   _ribbon(bucket, pts, width, color, lift) {
     if (!pts || pts.length < 2) return;
-    const left = [];
-    const right = [];
-    for (let i = 0; i < pts.length; i += 1) {
-      const prev = pts[Math.max(0, i - 1)];
-      const next = pts[Math.min(pts.length - 1, i + 1)];
-      let dx = next[0] - prev[0];
-      let dy = next[1] - prev[1];
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      const span = this._roadSpan(pts[i], pts[i + 1]);
+      if (!span) continue;
+      const [a, b] = span;
+      let dx = b[0] - a[0];
+      let dy = b[1] - a[1];
       const len = Math.hypot(dx, dy) || 1;
       dx /= len;
       dy /= len;
-      const x = pts[i][0];
-      const y = pts[i][1];
-      const h = this._height(x, y) + lift;
-      left.push([x - dy * width * 0.5, h, -(y + dx * width * 0.5)]);
-      right.push([x + dy * width * 0.5, h, -(y - dx * width * 0.5)]);
-    }
-    for (let i = 0; i < pts.length - 1; i += 1) {
-      if (!this._inRing(pts[i][0], pts[i][1]) || !this._inRing(pts[i + 1][0], pts[i + 1][1])) continue;
-      bucket.up(left[i], right[i], right[i + 1], color);
-      bucket.up(left[i], right[i + 1], left[i + 1], color);
+      const ha = this._height(a[0], a[1]) + lift;
+      const hb = this._height(b[0], b[1]) + lift;
+      const leftA = [a[0] - dy * width * 0.5, ha, -(a[1] + dx * width * 0.5)];
+      const rightA = [a[0] + dy * width * 0.5, ha, -(a[1] - dx * width * 0.5)];
+      const leftB = [b[0] - dy * width * 0.5, hb, -(b[1] + dx * width * 0.5)];
+      const rightB = [b[0] + dy * width * 0.5, hb, -(b[1] - dx * width * 0.5)];
+      bucket.up(leftA, rightA, rightB, color);
+      bucket.up(leftA, rightB, leftB, color);
     }
   }
 
@@ -961,6 +997,38 @@ export class IsoMap {
     }
     this.onSelect(best ? best.id : null);
   }
+}
+
+function roundTreeGeometry() {
+  const crown = new THREE.IcosahedronGeometry(2.5, 0);
+  crown.scale(1, 1.12, 1);
+  crown.translate(0, 4.8, 0);
+  const trunk = new THREE.CylinderGeometry(0.32, 0.45, 2.5, 5, 1);
+  trunk.translate(0, 1.25, 0);
+  const foliage = crown.toNonIndexed();
+  const stem = trunk.toNonIndexed();
+  foliage.computeVertexNormals();
+  stem.computeVertexNormals();
+  const leaves = foliage.attributes.position.count;
+  const bark = stem.attributes.position.count;
+  const position = new Float32Array((leaves + bark) * 3);
+  const normal = new Float32Array((leaves + bark) * 3);
+  const color = new Float32Array((leaves + bark) * 3);
+  position.set(foliage.attributes.position.array);
+  position.set(stem.attributes.position.array, leaves * 3);
+  normal.set(foliage.attributes.normal.array);
+  normal.set(stem.attributes.normal.array, leaves * 3);
+  for (let i = 0; i < leaves; i += 1) color.set([0.4, 0.54, 0.27], i * 3);
+  for (let i = 0; i < bark; i += 1) color.set([0.42, 0.33, 0.25], (leaves + i) * 3);
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(position, 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normal, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(color, 3));
+  crown.dispose();
+  trunk.dispose();
+  foliage.dispose();
+  stem.dispose();
+  return geometry;
 }
 
 function clipToRect(poly, x0, y0, x1, y1) {
