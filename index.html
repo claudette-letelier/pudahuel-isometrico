@@ -47,12 +47,14 @@
             <p>La comuna nació el 25 de febrero de 1897 como Las Barrancas, sobre el antiguo camino a Valparaíso. En 1975 tomó el nombre de Pudahuel. En 1981 se separaron Cerro Navia y Lo Prado.</p>
             <h2>De dónde salen los datos</h2>
             <ul>
+              <li>Manzanas: Censo de Población y Vivienda 2017, Instituto Nacional de Estadísticas, vía el repositorio jiboncom/chile_geojson. Solo las de la comuna de Pudahuel (código 13124).</li>
               <li>Calles, parques, agua, vía férrea, aeropuerto y huellas de edificios: © colaboradores de OpenStreetMap, licencia ODbL. El límite comunal es el de ese mismo mapa.</li>
-              <li>Alturas: si OpenStreetMap trae metros o pisos, se usan. El resto es una estimación según el tipo de edificio. No son las casas medidas una a una.</li>
+              <li>Relieve: SRTM de 1 segundo de arco, tesela S34W071, de los Terrain Tiles de AWS. Es un modelo de superficie: se le quitan techos y copas con una apertura de 100 m y un suavizado, y en la maqueta la pendiente se exagera con una curva logarítmica para que se note.</li>
+              <li>Alturas de edificios: si OpenStreetMap trae metros o pisos, se usan. Donde no hay huella, se generan casas frente a la calle, más altas donde el censo dice que vive más gente.</li>
               <li>Fichas cívicas: Municipalidad de Pudahuel, directorio de Juzgados de Policía Local del SERNAC, directorio de notarías y el Plan Municipal de Cultura 2024-2027.</li>
             </ul>
             <h2>Qué no está en el mapa</h2>
-            <p>Los juzgados de garantía, los tribunales de familia, la fiscalía y el Conservador de Bienes Raíces que atienden a vecinos de Pudahuel funcionan fuera de la comuna. Por eso no aparecen como puntos locales. Tampoco hay relieve medido: el suelo es plano.</p>
+            <p>Los juzgados de garantía, los tribunales de familia, la fiscalía y el Conservador de Bienes Raíces que atienden a vecinos de Pudahuel funcionan fuera de la comuna. Por eso no aparecen como puntos locales. El dibujo usa three.js con una cámara ortográfica a 30° de altura y 45° de giro, la vista de los simuladores de ciudad.</p>
             <h2>Controles</h2>
             <ul>
               <li>Arrastrar para mover. La rueda o un pellizco acercan.</li>
@@ -89,6 +91,7 @@
       <p id="scale"></p>
     </main>
   </div>
+  <script src="vendor/three.min.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

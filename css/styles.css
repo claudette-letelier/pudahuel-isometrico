@@ -164,6 +164,8 @@ button { cursor: pointer; }
 
 main { position: relative; flex: 1; min-width: 0; }
 #map { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+#pins { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
+.tools, #status, #scale { z-index: 2; }
 .tools {
   position: absolute;
   top: 16px;

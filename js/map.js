@@ -1,58 +1,21 @@
-const COS = Math.cos(Math.PI / 6);
-const SIN = Math.sin(Math.PI / 6);
+const EL = Math.PI / 6;
+const BASEH = 3200;
+const DIST = 8000;
+const HOME_ZOOM = matchMedia("(max-width: 760px)").matches ? 5 : 6;
 
-const DAY = {
-  sky: "#d9d0c2",
-  ground: "#e7dcc8",
-  outside: "#cfc6b6",
-  park: "#8ea56a",
-  water: "#7ea4b4",
-  airport: "#d4cbbd",
-  rail: "#6d645c",
-  roads: {
-    motorway: "#f7f1e4",
-    trunk: "#f4eee2",
-    primary: "#f3ecdf",
-    secondary: "#efe6d6",
-    tertiary: "#eadfcb",
-    residential: "#e6dcc6",
-    living_street: "#e6dcc6",
-    unclassified: "#e6dcc6",
-  },
-  roofs: ["#c46b45", "#e7dcc8", "#a7b0b4", "#8d5b49"],
-  wall: ["#d2c1ac", "#ddd0bd", "#c5c2bc", "#d0b8a6"],
-  wallDark: ["#b19784", "#c2b09a", "#9b9893", "#b39484"],
-  tree: "#6f8f4e",
-  trunk: "#7a624c",
-  label: "#3d4650",
-};
-
-const NIGHT = {
-  sky: "#141b26",
-  ground: "#1d2833",
-  outside: "#10161d",
-  park: "#24382c",
-  water: "#1d3c4a",
-  airport: "#2a333c",
-  rail: "#8d93a1",
-  roads: {
-    motorway: "#3a4654",
-    trunk: "#354150",
-    primary: "#313c4a",
-    secondary: "#2c3744",
-    tertiary: "#28323e",
-    residential: "#24303a",
-    living_street: "#24303a",
-    unclassified: "#24303a",
-  },
-  roofs: ["#6d4034", "#3c4650", "#4d565c", "#5c3a32"],
-  wall: ["#2a333c", "#303a44", "#343e48", "#322c2c"],
-  wallDark: ["#1b222a", "#222a32", "#262e36", "#241e1e"],
-  tree: "#2f4a34",
-  trunk: "#3a3128",
-  label: "#d5dbe3",
-  window: "#f0c56e",
-};
+const ROOF = [
+  [0.77, 0.42, 0.27],
+  [0.91, 0.86, 0.78],
+  [0.65, 0.69, 0.71],
+  [0.55, 0.36, 0.29],
+];
+const WALL = [
+  [0.82, 0.76, 0.67],
+  [0.87, 0.82, 0.74],
+  [0.77, 0.76, 0.74],
+  [0.82, 0.72, 0.65],
+];
+const WIDTHS = [16, 13, 11, 9.5, 7, 5, 3.5, 3.2];
 
 export const PIN_COLORS = {
   tribunales: "#e07a5f",
@@ -65,67 +28,159 @@ export const PIN_COLORS = {
   hitos: "#f2a488",
 };
 
-function rotate(x, y, rot) {
-  switch (rot & 3) {
-    case 1: return [-y, x];
-    case 2: return [-x, -y];
-    case 3: return [y, -x];
-    default: return [x, y];
+function relief(delta) {
+  const sign = Math.sign(delta);
+  return sign * 3 * 50 * Math.log1p(Math.abs(delta) / 50);
+}
+
+class Bucket {
+  constructor() {
+    this.pos = [];
+    this.nrm = [];
+    this.col = [];
+  }
+
+  tri(a, b, c, color) {
+    const ax = b[0] - a[0];
+    const ay = b[1] - a[1];
+    const az = b[2] - a[2];
+    const bx = c[0] - a[0];
+    const by = c[1] - a[1];
+    const bz = c[2] - a[2];
+    let nx = ay * bz - az * by;
+    let ny = az * bx - ax * bz;
+    let nz = ax * by - ay * bx;
+    const len = Math.hypot(nx, ny, nz) || 1;
+    nx /= len;
+    ny /= len;
+    nz /= len;
+    for (const p of [a, b, c]) {
+      this.pos.push(p[0], p[1], p[2]);
+      this.nrm.push(nx, ny, nz);
+      this.col.push(color[0], color[1], color[2]);
+    }
+  }
+
+  up(a, b, c, color) {
+    const ny = (b[2] - a[2]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[2] - a[2]);
+    if (ny >= 0) this.tri(a, b, c, color);
+    else this.tri(a, c, b, color);
+  }
+
+  mesh(material) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(this.pos, 3));
+    geometry.setAttribute("normal", new THREE.Float32BufferAttribute(this.nrm, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(this.col, 3));
+    geometry.computeBoundingSphere();
+    return new THREE.Mesh(geometry, material);
   }
 }
 
-function unrotate(x, y, rot) {
-  switch (rot & 3) {
-    case 1: return [y, -x];
-    case 2: return [-x, -y];
-    case 3: return [-y, x];
-    default: return [x, y];
-  }
+function windowMaterial(uniforms) {
+  const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uNight = uniforms.uNight;
+    shader.uniforms.uWin = uniforms.uWin;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec3 vWP;\nvarying vec3 vWN;")
+      .replace(
+        "#include <project_vertex>",
+        "#include <project_vertex>\nvWP=(modelMatrix*vec4(transformed,1.0)).xyz;\nvWN=normalize(mat3(modelMatrix)*objectNormal);",
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        "#include <common>\nvarying vec3 vWP;\nvarying vec3 vWN;\nuniform float uNight;\nuniform float uWin;",
+      )
+      .replace(
+        "#include <tonemapping_fragment>",
+        `if (abs(vWN.y) < 0.25 && vWP.y > 1.4) {
+          vec2 t = normalize(vec2(-vWN.z, vWN.x));
+          float u = fract(dot(vWP.xz, t) / 3.2);
+          float v = fract(vWP.y / 3.1);
+          float win = step(0.22, u) * step(u, 0.78) * step(0.24, v) * step(v, 0.74);
+          float lamp = fract(sin(dot(floor(vWP.xz * 0.2) + floor(vWP.y), vec2(12.9898, 78.233))) * 43758.5453);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, gl_FragColor.rgb * 0.72, win * uWin * (1.0 - uNight));
+          gl_FragColor.rgb += win * step(0.62, lamp) * uNight * vec3(1.0, 0.76, 0.38) * 0.9;
+        }
+        #include <tonemapping_fragment>`,
+      );
+  };
+  return material;
 }
 
 export class IsoMap {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
     this.city = null;
     this.places = [];
     this.visible = new Set();
     this.selected = null;
     this.night = false;
     this.labels = true;
-    this.cam = { x: 0, y: 0, zoom: 0.4, rot: 0 };
+    this.cam = { x: 0, y: 0, zoom: HOME_ZOOM, rot: 0 };
     this.dragging = false;
     this.dirty = true;
     this.onSelect = () => {};
+    this.W = 1;
+    this.H = 1;
+    this._paintedNight = null;
+    this._shadowStale = true;
+    this.ready = false;
+
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: "high-performance",
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setClearColor(0xd9d0c2, 1);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
+
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -30000, 30000);
+    this.hemi = new THREE.HemisphereLight(0xf4f1e6, 0x8e8a70, 0.5);
+    this.sun = new THREE.DirectionalLight(0xfff3dd, 0.82);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.scene.add(this.hemi, this.sun, this.sun.target);
+    this.sund = new THREE.Vector3(0.36, 0.707, -0.61).normalize();
+    this.slx = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), this.sund).normalize();
+    this.sly = new THREE.Vector3().crossVectors(this.sund, this.slx);
+    this.uni = { uNight: { value: 0 }, uWin: { value: 0 } };
+    this.raycaster = new THREE.Raycaster();
+    this._pv = new THREE.Vector3();
+    this._plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    this._hit = new THREE.Vector3();
+
+    this.overlay = document.createElement("canvas");
+    this.overlay.id = "pins";
+    canvas.parentElement.appendChild(this.overlay);
+    this.octx = this.overlay.getContext("2d");
     this._bind();
   }
 
   setCity(city) {
     this.city = city;
-    for (const building of city.buildings) {
-      let sx = 0;
-      let sy = 0;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const [x, y] of building.p) {
-        sx += x;
-        sy += y;
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x);
-        maxY = Math.max(maxY, y);
-      }
-      building.cx = sx / building.p.length;
-      building.cy = sy / building.p.length;
-      building.span = Math.hypot(maxX - minX, maxY - minY);
-    }
-    this.trees = this._trees(city.parks);
-    this.fit();
+    this._decodeElevation(city.elevation);
+    this._build(city);
+    this.ready = true;
+    this.focus(0, 0, HOME_ZOOM);
   }
 
   setPlaces(places, visible) {
+    if (this.city?.origin) {
+      const [lon0, lat0] = this.city.origin;
+      const kx = 111320 * Math.cos((lat0 * Math.PI) / 180);
+      const ky = 110950;
+      for (const place of places) {
+        place.x = (place.lon - lon0) * kx;
+        place.y = (place.lat - lat0) * ky;
+      }
+    }
     this.places = places;
     this.visible = visible;
     this.dirty = true;
@@ -141,101 +196,103 @@ export class IsoMap {
     this.dirty = true;
   }
 
-  focus(x, y, zoom = 1.6) {
-    this.cam.x = x;
-    this.cam.y = y;
-    this.cam.zoom = zoom;
-    this.dirty = true;
+  focus(x, y, zoom = HOME_ZOOM) {
+    const az = this._az();
+    const lifted = this._height(x, y) / Math.tan(EL);
+    this.cam.x = x - Math.sin(az) * lifted;
+    this.cam.y = y + Math.cos(az) * lifted;
+    this.cam.zoom = Math.max(0.12, Math.min(26, zoom));
+    const panel = document.querySelector("#panel");
+    const ox = panel && this.W > 760 ? panel.getBoundingClientRect().width / 2 : 0;
+    const k = BASEH / this.cam.zoom / this.H;
+    this.cam.x -= ox * k * Math.cos(az);
+    this.cam.y -= ox * k * Math.sin(az);
+    this._placeCam(true);
   }
 
   fit() {
-    const ring = this.city.boundary[0];
+    const ring = this.city?.boundary || [];
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
     for (const [x, y] of ring) {
-      const iso = this._iso(x, y, 0);
-      minX = Math.min(minX, iso[0]);
-      minY = Math.min(minY, iso[1]);
-      maxX = Math.max(maxX, iso[0]);
-      maxY = Math.max(maxY, iso[1]);
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
     }
-    const { width, height } = this.canvas.getBoundingClientRect();
-    const zx = (width - 80) / (maxX - minX || 1);
-    const zy = (height - 80) / (maxY - minY || 1);
-    this.cam.zoom = Math.max(0.08, Math.min(zx, zy));
-    this.cam.x = 0;
-    this.cam.y = 0;
-    const world = this._isoToWorld((minX + maxX) / 2, (minY + maxY) / 2);
-    this.cam.x = world[0];
-    this.cam.y = world[1];
-    this.dirty = true;
+    const span = Math.max(maxX - minX, maxY - minY, 1);
+    const zoom = BASEH / (span * 1.15 * Math.sin(EL));
+    this.focus((minX + maxX) / 2, (minY + maxY) / 2, zoom);
   }
 
   zoomBy(factor, sx, sy) {
-    const rect = this.canvas.getBoundingClientRect();
-    const px = sx ?? rect.width / 2;
-    const py = sy ?? rect.height / 2;
-    const before = this._screenToWorld(px, py);
-    this.cam.zoom = Math.min(6, Math.max(0.08, this.cam.zoom * factor));
-    const after = this._screenToWorld(px, py);
-    this.cam.x += before[0] - after[0];
-    this.cam.y += before[1] - after[1];
-    this.dirty = true;
+    const before = sx == null ? null : this._planeAt(sx, sy);
+    this.cam.zoom = Math.max(0.12, Math.min(26, this.cam.zoom * factor));
+    this._placeCam(false);
+    if (!before) {
+      this._shadowStale = true;
+      return;
+    }
+    const after = this._planeAt(sx, sy);
+    if (after) {
+      this.cam.x += before[0] - after[0];
+      this.cam.y += before[1] - after[1];
+      this._placeCam(false);
+    }
+    this._shadowStale = true;
   }
 
   rotate(step) {
     this.cam.rot = (this.cam.rot + step + 4) & 3;
-    this.dirty = true;
+    this._placeCam(true);
   }
 
   resetNorth() {
     this.cam.rot = 0;
-    this.dirty = true;
+    this._placeCam(true);
   }
 
   resize() {
     const rect = this.canvas.getBoundingClientRect();
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
-    this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    this.view = { width: rect.width, height: rect.height };
-    this.dirty = true;
+    this.W = Math.max(1, rect.width);
+    this.H = Math.max(1, rect.height);
+    this.renderer.setPixelRatio(dpr);
+    this.renderer.setSize(this.W, this.H, false);
+    this.overlay.width = Math.max(1, Math.floor(this.W * dpr));
+    this.overlay.height = Math.max(1, Math.floor(this.H * dpr));
+    this.overlay.style.width = `${this.W}px`;
+    this.overlay.style.height = `${this.H}px`;
+    this.octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this._placeCam(true);
   }
 
   draw() {
-    if (!this.city || !this.view) return;
-    const ctx = this.ctx;
-    const theme = this.night ? NIGHT : DAY;
-    const { width, height } = this.view;
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = theme.outside;
-    ctx.fillRect(0, 0, width, height);
-
-    this._fillRings(this.city.boundary, theme.ground);
-    this._fillRings(this.city.parks, theme.park);
-    this._fillRings(this.city.water, theme.water);
-    this._strokeOpen(this.city.waterways, theme.water, 7);
-    this._fillRings(this.city.airport, theme.airport);
-    this._strokeOpen(this.city.runways, this.night ? "#4c5968" : "#f7f4ee", 10);
-    this._strokeLines(this.city.streets, theme);
-    this._strokeRails(theme);
-    this._drawTrees(theme);
-    this._drawBuildings(theme);
-    if (this.labels) this._drawLabels(theme);
-    this._drawPins();
+    if (!this.ready) return;
+    if (this._paintedNight !== this.night) this._applyNight();
+    if (this._shadowStale && !this.dragging) {
+      this._fitShadow();
+      this._shadowStale = false;
+    }
+    const cast = this.cam.zoom >= 0.9;
+    if (this.buildings) this.buildings.castShadow = cast;
+    this.renderer.render(this.scene, this.camera);
+    this._drawOverlay();
     this.dirty = false;
   }
 
   metersPerPixel() {
-    return 1 / (this.cam.zoom * COS);
+    return BASEH / this.cam.zoom / this.H;
   }
 
   scaleLabel() {
-    const meters = this.metersPerPixel() * 110;
-    const steps = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
+    const a = this._planeAt(this.W / 2, this.H / 2);
+    const b = this._planeAt(this.W / 2 + 110, this.H / 2);
+    if (!a || !b) return "";
+    const meters = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const steps = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
     let best = steps[0];
     for (const step of steps) {
       if (Math.abs(step - meters) < Math.abs(best - meters)) best = step;
@@ -243,16 +300,432 @@ export class IsoMap {
     return best >= 1000 ? `${best / 1000} km` : `${best} m`;
   }
 
+  _az() {
+    return Math.PI / 4 + this.cam.rot * (Math.PI / 2);
+  }
+
+  _decodeElevation(elev) {
+    const [nx, ny] = elev.n;
+    const z = new Float32Array(nx * ny);
+    let acc = 0;
+    for (let i = 0; i < elev.h.length; i += 1) {
+      acc += elev.h[i];
+      z[i] = relief(acc / 10);
+    }
+    this.elev = { o: elev.o, s: elev.s, nx, ny, z };
+  }
+
+  _height(x, y) {
+    const elev = this.elev;
+    if (!elev) return 0;
+    const fx = (x - elev.o[0]) / elev.s;
+    const fy = (y - elev.o[1]) / elev.s;
+    if (fx < 0 || fy < 0 || fx > elev.nx - 1 || fy > elev.ny - 1) return 0;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const x1 = Math.min(x0 + 1, elev.nx - 1);
+    const y1 = Math.min(y0 + 1, elev.ny - 1);
+    const tx = fx - x0;
+    const ty = fy - y0;
+    const g = (ix, iy) => elev.z[iy * elev.nx + ix];
+    return (
+      g(x0, y0) * (1 - tx) * (1 - ty) +
+      g(x1, y0) * tx * (1 - ty) +
+      g(x0, y1) * (1 - tx) * ty +
+      g(x1, y1) * tx * ty
+    );
+  }
+
+  _build(city) {
+    for (const mesh of [this.terrain, this.ground, this.waterMesh, this.buildings]) {
+      if (!mesh) continue;
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+    }
+    const ground = new Bucket();
+    const water = new Bucket();
+    const built = new Bucket();
+    const yard = [0.9, 0.86, 0.76];
+    const park = [0.56, 0.65, 0.42];
+    const soil = [0.89, 0.84, 0.74];
+    const road = [0.95, 0.92, 0.84];
+    const apron = [0.8, 0.77, 0.7];
+    const rail = [0.42, 0.38, 0.35];
+    const blue = [0.45, 0.62, 0.7];
+
+    for (const block of city.blocks || []) this._drape(ground, block.p, block.k === "empty" ? park : yard, 0.18);
+    for (const ring of city.parks || []) this._drape(ground, ring, park, 0.28);
+    for (const ring of city.airport || []) this._drape(ground, ring, apron, 0.16);
+    for (const street of city.streets || []) {
+      this._ribbon(ground, street.p, WIDTHS[street.k] || 3.2, road, 0.45);
+    }
+    for (const line of city.rails || []) this._ribbon(ground, line, 3.2, rail, 0.5);
+    for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
+    for (const ring of city.water || []) this._drape(water, ring, blue, 0.22);
+    for (const line of city.waterways || []) this._ribbon(water, line, 6, blue, 0.3);
+    this._trees(ground, city.parks || []);
+
+    for (const building of city.buildings || []) {
+      const [cx, cy] = centroid(building.p);
+      const base = this._height(cx, cy) - 1.2;
+      this._prism(built, building.p, base, building.h + 1.2, ROOF[building.r % 4], WALL[building.r % 4]);
+    }
+    for (const house of city.houses || []) {
+      const base = this._height(house.c[0], house.c[1]) - 0.8;
+      this._box(built, house.c[0], house.c[1], house.a, house.w, house.d, base, house.h + 0.8, ROOF[house.r % 4], WALL[house.r % 4]);
+    }
+
+    const flat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const wet = new THREE.MeshLambertMaterial({
+      vertexColors: true,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -2,
+    });
+    this.terrain = this._terrainMesh(soil);
+    this.terrain.receiveShadow = true;
+    this.ground = ground.mesh(flat);
+    this.ground.receiveShadow = true;
+    this.waterMesh = water.mesh(wet);
+    this.waterMesh.receiveShadow = true;
+    this.buildings = built.mesh(windowMaterial(this.uni));
+    this.buildings.castShadow = true;
+    this.buildings.receiveShadow = true;
+    this.scene.add(this.terrain, this.ground, this.waterMesh, this.buildings);
+  }
+
+  _terrainMesh(color) {
+    const { o, s, nx, ny, z } = this.elev;
+    const pos = new Float32Array(nx * ny * 3);
+    const col = new Float32Array(nx * ny * 3);
+    for (let j = 0; j < ny; j += 1) {
+      for (let i = 0; i < nx; i += 1) {
+        const k = (j * nx + i) * 3;
+        pos[k] = o[0] + i * s;
+        pos[k + 1] = z[j * nx + i];
+        pos[k + 2] = -(o[1] + j * s);
+        col[k] = color[0];
+        col[k + 1] = color[1];
+        col[k + 2] = color[2];
+      }
+    }
+    const idx = new Uint32Array((nx - 1) * (ny - 1) * 6);
+    let t = 0;
+    for (let j = 0; j < ny - 1; j += 1) {
+      for (let i = 0; i < nx - 1; i += 1) {
+        const a = j * nx + i;
+        idx[t++] = a;
+        idx[t++] = a + 1;
+        idx[t++] = a + nx + 1;
+        idx[t++] = a;
+        idx[t++] = a + nx + 1;
+        idx[t++] = a + nx;
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geometry.setAttribute("color", new THREE.BufferAttribute(col, 3));
+    geometry.setIndex(new THREE.BufferAttribute(idx, 1));
+    geometry.computeVertexNormals();
+    return new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  }
+
+  _drape(bucket, ring, color, lift) {
+    if (!ring || ring.length < 3) return;
+    const contour = ring.map(([x, y]) => new THREE.Vector2(x, y));
+    let faces = [];
+    try {
+      faces = THREE.ShapeUtils.triangulateShape(contour, []);
+    } catch {
+      return;
+    }
+    const verts = ring.map(([x, y]) => [x, this._height(x, y) + lift, -y]);
+    for (const [i, j, k] of faces) bucket.up(verts[i], verts[j], verts[k], color);
+  }
+
+  _ribbon(bucket, pts, width, color, lift) {
+    if (!pts || pts.length < 2) return;
+    const left = [];
+    const right = [];
+    for (let i = 0; i < pts.length; i += 1) {
+      const prev = pts[Math.max(0, i - 1)];
+      const next = pts[Math.min(pts.length - 1, i + 1)];
+      let dx = next[0] - prev[0];
+      let dy = next[1] - prev[1];
+      const len = Math.hypot(dx, dy) || 1;
+      dx /= len;
+      dy /= len;
+      const x = pts[i][0];
+      const y = pts[i][1];
+      const h = this._height(x, y) + lift;
+      left.push([x - dy * width * 0.5, h, -(y + dx * width * 0.5)]);
+      right.push([x + dy * width * 0.5, h, -(y - dx * width * 0.5)]);
+    }
+    for (let i = 0; i < pts.length - 1; i += 1) {
+      bucket.up(left[i], right[i], right[i + 1], color);
+      bucket.up(left[i], right[i + 1], left[i + 1], color);
+    }
+  }
+
+  _prism(bucket, ring, base, height, roof, wall) {
+    const n = ring.length;
+    if (n < 3) return;
+    const top = [];
+    const bot = [];
+    for (const [x, y] of ring) {
+      top.push([x, base + height, -y]);
+      bot.push([x, base, -y]);
+    }
+    for (let i = 0; i < n; i += 1) {
+      const j = (i + 1) % n;
+      const dx = ring[j][0] - ring[i][0];
+      const dy = ring[j][1] - ring[i][1];
+      this._wall(bucket, bot[i], bot[j], top[j], top[i], wall, dy, dx);
+    }
+    const contour = ring.map(([x, y]) => new THREE.Vector2(x, y));
+    let faces = [];
+    try {
+      faces = THREE.ShapeUtils.triangulateShape(contour, []);
+    } catch {
+      faces = [];
+    }
+    for (const [i, j, k] of faces) bucket.up(top[i], top[j], top[k], roof);
+  }
+
+  _wall(bucket, a, b, c, d, color, outX, outZ) {
+    const ax = b[0] - a[0];
+    const ay = b[1] - a[1];
+    const az = b[2] - a[2];
+    const bx = c[0] - a[0];
+    const by = c[1] - a[1];
+    const bz = c[2] - a[2];
+    const nx = ay * bz - az * by;
+    const nz = ax * by - ay * bx;
+    if (nx * outX + nz * outZ >= 0) {
+      bucket.tri(a, b, c, color);
+      bucket.tri(a, c, d, color);
+    } else {
+      bucket.tri(a, c, b, color);
+      bucket.tri(a, d, c, color);
+    }
+  }
+
+  _box(bucket, cx, cy, angle, w, d, base, height, roof, wall) {
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const hx = w / 2;
+    const hd = d / 2;
+    const ring = [
+      [-hx, -hd],
+      [hx, -hd],
+      [hx, hd],
+      [-hx, hd],
+    ].map(([lx, ly]) => [cx + lx * c - ly * s, cy + lx * s + ly * c]);
+    this._prism(bucket, ring, base, height, roof, wall);
+  }
+
+  _trees(bucket, parks) {
+    let count = 0;
+    const leaf = [0.33, 0.46, 0.26];
+    const trunk = [0.4, 0.3, 0.2];
+    for (const ring of parks) {
+      if (count > 1600 || ring.length < 3) continue;
+      let area = 0;
+      for (let i = 0; i < ring.length; i += 1) {
+        const a = ring[i];
+        const b = ring[(i + 1) % ring.length];
+        area += a[0] * b[1] - b[0] * a[1];
+      }
+      if (Math.abs(area) > 160000) continue;
+      for (let i = 0; i < ring.length && count < 1600; i += 1) {
+        const a = ring[i];
+        const b = ring[(i + 1) % ring.length];
+        const dx = b[0] - a[0];
+        const dy = b[1] - a[1];
+        const len = Math.hypot(dx, dy);
+        if (len < 18) continue;
+        const steps = Math.min(6, Math.floor(len / 16));
+        for (let s = 1; s <= steps && count < 1600; s += 1) {
+          const t = s / (steps + 1);
+          const x = a[0] + dx * t - dy * (4 / len);
+          const y = a[1] + dy * t + dx * (4 / len);
+          const h = this._height(x, y);
+          this._box(bucket, x, y, 0, 0.6, 0.6, h, 2.2, trunk, trunk);
+          this._box(bucket, x, y, 0.4, 3.2, 3.2, h + 2.2, 3.4, leaf, leaf);
+          count += 1;
+        }
+      }
+    }
+  }
+
+  _placeCam(shadow) {
+    const h = BASEH / this.cam.zoom;
+    const aspect = this.W / this.H;
+    const cam = this.camera;
+    cam.left = (-h * aspect) / 2;
+    cam.right = (h * aspect) / 2;
+    cam.top = h / 2;
+    cam.bottom = -h / 2;
+    const az = this._az();
+    const tx = this.cam.x;
+    const ty = this.cam.y;
+    cam.position.set(
+      tx + Math.sin(az) * Math.cos(EL) * DIST,
+      Math.sin(EL) * DIST,
+      -ty + Math.cos(az) * Math.cos(EL) * DIST,
+    );
+    cam.up.set(0, 1, 0);
+    cam.lookAt(tx, 0, -ty);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    const ppm = this.H / h;
+    this.uni.uWin.value = Math.max(0, Math.min(1, (ppm - 1.2) / 1.6));
+    if (shadow) this._fitShadow();
+    else this._shadowStale = true;
+    this.dirty = true;
+  }
+
+  _fitShadow() {
+    const cam = this.camera;
+    let x0 = 1e9;
+    let x1 = -1e9;
+    let y0 = 1e9;
+    let y1 = -1e9;
+    let z0 = 1e9;
+    let z1 = -1e9;
+    for (const sx of [-1, 1]) {
+      for (const sy of [-1, 1]) {
+        const origin = new THREE.Vector3(sx, sy, -1).unproject(cam);
+        const far = new THREE.Vector3(sx, sy, 1).unproject(cam);
+        const dir = far.sub(origin);
+        if (Math.abs(dir.y) < 1e-4) continue;
+        dir.normalize();
+        for (const height of [-30, 90]) {
+          const t = (height - origin.y) / dir.y;
+          const v = origin.clone().addScaledVector(dir, t);
+          const px = v.dot(this.slx);
+          const py = v.dot(this.sly);
+          const pz = v.dot(this.sund);
+          x0 = Math.min(x0, px);
+          x1 = Math.max(x1, px);
+          y0 = Math.min(y0, py);
+          y1 = Math.max(y1, py);
+          z0 = Math.min(z0, pz);
+          z1 = Math.max(z1, pz);
+        }
+      }
+    }
+    if (x0 > x1) return;
+    const cx = (x0 + x1) / 2;
+    const cy = (y0 + y1) / 2;
+    const hx = Math.max(8, ((x1 - x0) / 2) * 1.25);
+    const hy = Math.max(8, ((y1 - y0) / 2) * 1.25);
+    this.sun.target.position
+      .copy(this.slx)
+      .multiplyScalar(cx)
+      .addScaledVector(this.sly, cy)
+      .addScaledVector(this.sund, z0);
+    this.sun.position.copy(this.sun.target.position).addScaledVector(this.sund, z1 - z0 + 400);
+    this.sun.target.updateMatrixWorld();
+    const shadow = this.sun.shadow.camera;
+    shadow.left = -hx;
+    shadow.right = hx;
+    shadow.bottom = -hy;
+    shadow.top = hy;
+    shadow.near = 1;
+    shadow.far = z1 - z0 + 420;
+    shadow.updateProjectionMatrix();
+    this.sun.shadow.normalBias = 1.5;
+    this.sun.shadow.bias = -0.0004;
+    this.renderer.shadowMap.needsUpdate = true;
+  }
+
+  _applyNight() {
+    this._paintedNight = this.night;
+    this.renderer.setClearColor(this.night ? 0x141b26 : 0xd9d0c2, 1);
+    this.hemi.color.set(this.night ? 0x243044 : 0xf4f1e6);
+    this.hemi.groundColor.set(this.night ? 0x141810 : 0x8e8a70);
+    this.hemi.intensity = this.night ? 0.22 : 0.5;
+    this.sun.color.set(this.night ? 0x9eb4d4 : 0xfff3dd);
+    this.sun.intensity = this.night ? 0.16 : 0.82;
+    this.uni.uNight.value = this.night ? 1 : 0;
+    this.renderer.shadowMap.needsUpdate = true;
+  }
+
+  _planeAt(px, py) {
+    const ndc = new THREE.Vector2((px / this.W) * 2 - 1, -(py / this.H) * 2 + 1);
+    this.raycaster.setFromCamera(ndc, this.camera);
+    return this.raycaster.ray.intersectPlane(this._plane, this._hit) ? [this._hit.x, -this._hit.z] : null;
+  }
+
+  _project(x, y, extra) {
+    const v = this._pv.set(x, this._height(x, y) + extra, -y).project(this.camera);
+    return {
+      sx: (v.x + 1) * 0.5 * this.W,
+      sy: (1 - v.y) * 0.5 * this.H,
+      ok: v.z >= -1 && v.z <= 1 && Math.abs(v.x) < 1.2 && Math.abs(v.y) < 1.2,
+    };
+  }
+
+  _drawOverlay() {
+    const ctx = this.octx;
+    ctx.clearRect(0, 0, this.W, this.H);
+    if (this.labels && this.cam.zoom > 2.4) this._drawLabels(ctx);
+    this._drawPins(ctx);
+  }
+
+  _drawLabels(ctx) {
+    ctx.font = "12px Outfit, sans-serif";
+    ctx.fillStyle = this.night ? "#d5dbe3" : "#3d4650";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const taken = [];
+    for (const street of this.city.streets || []) {
+      if (!street.n || street.k > 4) continue;
+      const mid = street.p[Math.floor(street.p.length / 2)];
+      const point = this._project(mid[0], mid[1], 1);
+      if (!point.ok) continue;
+      if (taken.some(([x, y]) => Math.hypot(x - point.sx, y - point.sy) < 72)) continue;
+      taken.push([point.sx, point.sy]);
+      ctx.fillText(street.n, point.sx, point.sy);
+      if (taken.length > 40) break;
+    }
+  }
+
+  _drawPins(ctx) {
+    for (const place of this.places) {
+      if (!this.visible.has(place.layer)) continue;
+      const point = this._project(place.x, place.y, 4);
+      if (!point.ok) continue;
+      const on = place.id === this.selected;
+      const sy = point.sy - 12;
+      ctx.beginPath();
+      ctx.moveTo(point.sx, point.sy);
+      ctx.lineTo(point.sx, sy);
+      ctx.strokeStyle = "#1b2430";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(point.sx, sy, on ? 8 : 5.5, 0, Math.PI * 2);
+      ctx.fillStyle = PIN_COLORS[place.layer] || "#e07a5f";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = on ? "#fffaf3" : "#1b2430";
+      ctx.stroke();
+    }
+  }
+
   _bind() {
     const canvas = this.canvas;
     let last = null;
     const pointers = new Map();
-
     canvas.addEventListener("pointerdown", (event) => {
       canvas.setPointerCapture(event.pointerId);
       pointers.set(event.pointerId, event);
       last = event;
       this.dragging = false;
+      canvas.style.cursor = "grabbing";
     });
     canvas.addEventListener("pointermove", (event) => {
       pointers.set(event.pointerId, event);
@@ -263,7 +736,7 @@ export class IsoMap {
         this._pinch = dist;
         return;
       }
-      if (!last || !pointers.has(event.pointerId) || event.buttons === 0 && event.pointerType === "mouse") return;
+      if (!last || !pointers.has(event.pointerId) || (event.buttons === 0 && event.pointerType === "mouse")) return;
       const dx = event.clientX - last.clientX;
       const dy = event.clientY - last.clientY;
       if (Math.hypot(dx, dy) > 2) this.dragging = true;
@@ -273,29 +746,41 @@ export class IsoMap {
     const end = (event) => {
       pointers.delete(event.pointerId);
       this._pinch = null;
+      canvas.style.cursor = "grab";
       if (!this.dragging && event.type === "pointerup") {
         const rect = canvas.getBoundingClientRect();
         this._pick(event.clientX - rect.left, event.clientY - rect.top);
       }
       last = pointers.size ? [...pointers.values()].at(-1) : null;
       this.dragging = false;
+      this._shadowStale = true;
+      this.dirty = true;
     };
     canvas.addEventListener("pointerup", end);
     canvas.addEventListener("pointercancel", end);
-    canvas.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      const rect = canvas.getBoundingClientRect();
-      const factor = event.deltaY < 0 ? 1.12 : 0.89;
-      this.zoomBy(factor, event.clientX - rect.left, event.clientY - rect.top);
-    }, { passive: false });
+    canvas.addEventListener(
+      "wheel",
+      (event) => {
+        event.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        this.zoomBy(event.deltaY < 0 ? 1.12 : 0.89, event.clientX - rect.left, event.clientY - rect.top);
+      },
+      { passive: false },
+    );
   }
 
   _pan(dx, dy) {
-    const [ix, iy] = this._focusIso();
-    const world = this._isoToWorld(ix - dx / this.cam.zoom, iy - dy / this.cam.zoom);
-    this.cam.x = world[0];
-    this.cam.y = world[1];
-    this.dirty = true;
+    const right = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(this.camera.matrixWorld, 1);
+    up.y = 0;
+    if (up.lengthSq() < 1e-6) return;
+    up.normalize();
+    const k = BASEH / this.cam.zoom / this.H;
+    const mx = -right.x * dx * k + (up.x * dy * k) / Math.sin(EL);
+    const mz = -right.z * dx * k + (up.z * dy * k) / Math.sin(EL);
+    this.cam.x += mx;
+    this.cam.y -= mz;
+    this._placeCam(false);
   }
 
   _pick(sx, sy) {
@@ -303,8 +788,8 @@ export class IsoMap {
     let bestDist = 18;
     for (const place of this.places) {
       if (!this.visible.has(place.layer)) continue;
-      const point = this._project(place.x, place.y, 26);
-      const dist = Math.hypot(point.sx - sx, point.sy - sy);
+      const point = this._project(place.x, place.y, 4);
+      const dist = Math.hypot(point.sx - sx, point.sy - 12 - sy);
       if (dist < bestDist) {
         best = place;
         bestDist = dist;
@@ -312,296 +797,14 @@ export class IsoMap {
     }
     this.onSelect(best ? best.id : null);
   }
-
-  _focusIso() {
-    return this._iso(this.cam.x, this.cam.y, 0);
-  }
-
-  _iso(x, y, z) {
-    const [rx, ry] = rotate(x, y, this.cam.rot);
-    return [(rx - ry) * COS, (rx + ry) * SIN - z];
-  }
-
-  _isoToWorld(ix, iy) {
-    const rx = (ix / COS + iy / SIN) / 2;
-    const ry = (iy / SIN - ix / COS) / 2;
-    return unrotate(rx, ry, this.cam.rot);
-  }
-
-  _project(x, y, z = 0) {
-    const iso = this._iso(x, y, z);
-    const focus = this._focusIso();
-    return {
-      sx: (iso[0] - focus[0]) * this.cam.zoom + this.view.width / 2,
-      sy: (iso[1] - focus[1]) * this.cam.zoom + this.view.height / 2,
-    };
-  }
-
-  _screenToWorld(sx, sy) {
-    const focus = this._focusIso();
-    const ix = (sx - this.view.width / 2) / this.cam.zoom + focus[0];
-    const iy = (sy - this.view.height / 2) / this.cam.zoom + focus[1];
-    return this._isoToWorld(ix, iy);
-  }
-
-  _onScreen(point, margin = 80) {
-    return point.sx > -margin && point.sy > -margin && point.sx < this.view.width + margin && point.sy < this.view.height + margin;
-  }
-
-  _fillRings(rings, color) {
-    if (!rings?.length) return;
-    const ctx = this.ctx;
-    ctx.beginPath();
-    for (const ring of rings) {
-      if (!ring.length) continue;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      const projected = ring.map(([x, y]) => {
-        const point = this._project(x, y, 0);
-        minX = Math.min(minX, point.sx);
-        minY = Math.min(minY, point.sy);
-        maxX = Math.max(maxX, point.sx);
-        maxY = Math.max(maxY, point.sy);
-        return point;
-      });
-      if (maxX < -200 || maxY < -200 || minX > this.view.width + 200 || minY > this.view.height + 200) continue;
-      ctx.moveTo(projected[0].sx, projected[0].sy);
-      for (let i = 1; i < projected.length; i += 1) ctx.lineTo(projected[i].sx, projected[i].sy);
-      ctx.closePath();
-    }
-    ctx.fillStyle = color;
-    ctx.fill();
-  }
-
-  _strokeLines(streets, theme) {
-    const ctx = this.ctx;
-    const zoom = this.cam.zoom;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (const street of streets) {
-      if (zoom < 0.45 && (street.k === "residential" || street.k === "living_street" || street.k === "unclassified")) continue;
-      if (zoom < 0.22 && (street.k === "tertiary" || street.k === "secondary")) continue;
-      const first = this._project(street.p[0][0], street.p[0][1], 0.4);
-      let visible = this._onScreen(first, 120);
-      if (!visible) {
-        for (let i = 1; i < street.p.length; i += 1) {
-          if (this._onScreen(this._project(street.p[i][0], street.p[i][1], 0.4), 120)) {
-            visible = true;
-            break;
-          }
-        }
-      }
-      if (!visible) continue;
-      ctx.beginPath();
-      ctx.moveTo(first.sx, first.sy);
-      for (let i = 1; i < street.p.length; i += 1) {
-        const point = this._project(street.p[i][0], street.p[i][1], 0.4);
-        ctx.lineTo(point.sx, point.sy);
-      }
-      ctx.strokeStyle = theme.roads[street.k] || theme.roads.residential;
-      ctx.lineWidth = Math.max(0.6, street.w * zoom * 0.55);
-      ctx.stroke();
-    }
-  }
-
-  _strokeOpen(lines, color, widthMeters) {
-    if (!lines?.length) return;
-    const ctx = this.ctx;
-    ctx.strokeStyle = color;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(1, widthMeters * this.cam.zoom * 0.55);
-    for (const line of lines) {
-      const first = this._project(line[0][0], line[0][1], 0.2);
-      ctx.beginPath();
-      ctx.moveTo(first.sx, first.sy);
-      for (let i = 1; i < line.length; i += 1) {
-        const point = this._project(line[i][0], line[i][1], 0.2);
-        ctx.lineTo(point.sx, point.sy);
-      }
-      ctx.stroke();
-    }
-  }
-
-  _strokeRails(theme) {
-    const ctx = this.ctx;
-    ctx.strokeStyle = theme.rail;
-    ctx.lineWidth = Math.max(1, 3 * this.cam.zoom);
-    for (const line of this.city.rails) {
-      ctx.beginPath();
-      const first = this._project(line[0][0], line[0][1], 0.8);
-      ctx.moveTo(first.sx, first.sy);
-      for (let i = 1; i < line.length; i += 1) {
-        const point = this._project(line[i][0], line[i][1], 0.8);
-        ctx.lineTo(point.sx, point.sy);
-      }
-      ctx.stroke();
-    }
-  }
-
-  _drawTrees(theme) {
-    if (this.cam.zoom < 0.35) return;
-    const ctx = this.ctx;
-    for (const tree of this.trees) {
-      const base = this._project(tree[0], tree[1], 0);
-      if (!this._onScreen(base, 20)) continue;
-      const top = this._project(tree[0], tree[1], 8);
-      ctx.strokeStyle = theme.trunk;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(base.sx, base.sy);
-      ctx.lineTo(top.sx, top.sy);
-      ctx.stroke();
-      ctx.fillStyle = theme.tree;
-      ctx.beginPath();
-      ctx.ellipse(top.sx, top.sy, Math.max(2, 4.5 * this.cam.zoom), Math.max(1.4, 2.6 * this.cam.zoom), 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  _drawBuildings(theme) {
-    const ctx = this.ctx;
-    const zoom = this.cam.zoom;
-    const list = [];
-    for (const building of this.city.buildings) {
-      if (zoom < 0.3 && building.span < 18) continue;
-      if (zoom < 0.55 && building.span < 10) continue;
-      if (this.dragging && zoom < 1 && building.span < 16) continue;
-      const [rx, ry] = rotate(building.cx, building.cy, this.cam.rot);
-      const probe = this._project(building.cx, building.cy, 0);
-      if (!this._onScreen(probe, 160 + building.span * zoom)) continue;
-      building._depth = rx + ry;
-      list.push(building);
-    }
-    list.sort((a, b) => a._depth - b._depth);
-    for (const building of list) {
-      const roof = theme.roofs[building.r] || theme.roofs[0];
-      const wall = theme.wall[building.r] || theme.wall[0];
-      const wallDark = theme.wallDark[building.r] || theme.wallDark[0];
-      const top = building.p.map(([x, y]) => this._project(x, y, building.h));
-      const bottom = building.p.map(([x, y]) => this._project(x, y, 0));
-      const [cx, cy] = rotate(building.cx, building.cy, this.cam.rot);
-      const centerDepth = cx + cy;
-      for (let i = 0; i < building.p.length; i += 1) {
-        const j = (i + 1) % building.p.length;
-        const [ax, ay] = building.p[i];
-        const [bx, by] = building.p[j];
-        const [mx, my] = rotate((ax + bx) / 2, (ay + by) / 2, this.cam.rot);
-        if (mx + my < centerDepth) continue;
-        const facing = (mx + my) - centerDepth;
-        ctx.beginPath();
-        ctx.moveTo(top[i].sx, top[i].sy);
-        ctx.lineTo(top[j].sx, top[j].sy);
-        ctx.lineTo(bottom[j].sx, bottom[j].sy);
-        ctx.lineTo(bottom[i].sx, bottom[i].sy);
-        ctx.closePath();
-        ctx.fillStyle = facing > 0 ? wall : wallDark;
-        ctx.fill();
-        if (this.night && building.h > 11 && zoom > 0.7) {
-          ctx.fillStyle = NIGHT.window;
-          const wx = (top[i].sx + bottom[i].sx) / 2;
-          const wy = (top[i].sy + top[j].sy) / 2 - 2;
-          ctx.fillRect(wx, wy, 2, 2);
-        }
-      }
-      ctx.beginPath();
-      ctx.moveTo(top[0].sx, top[0].sy);
-      for (let i = 1; i < top.length; i += 1) ctx.lineTo(top[i].sx, top[i].sy);
-      ctx.closePath();
-      ctx.fillStyle = roof;
-      ctx.fill();
-    }
-  }
-
-  _drawLabels(theme) {
-    if (this.cam.zoom < 0.7) return;
-    const ctx = this.ctx;
-    const used = new Set();
-    ctx.fillStyle = theme.label;
-    ctx.font = "12px Outfit, sans-serif";
-    ctx.textAlign = "center";
-    for (const street of this.city.streets) {
-      if (!street.n || (street.k !== "primary" && street.k !== "trunk" && street.k !== "motorway" && street.k !== "secondary")) continue;
-      const mid = street.p[Math.floor(street.p.length / 2)];
-      const point = this._project(mid[0], mid[1], 2);
-      if (!this._onScreen(point, 0)) continue;
-      const cell = `${Math.round(point.sx / 110)}:${Math.round(point.sy / 70)}`;
-      if (used.has(cell)) continue;
-      used.add(cell);
-      ctx.fillText(street.n, point.sx, point.sy);
-    }
-  }
-
-  _drawPins() {
-    const ctx = this.ctx;
-    for (const place of this.places) {
-      if (!this.visible.has(place.layer)) continue;
-      const selected = place.id === this.selected;
-      const base = this._project(place.x, place.y, 0);
-      const head = this._project(place.x, place.y, selected ? 36 : 24);
-      if (!this._onScreen(head, 30)) continue;
-      ctx.strokeStyle = PIN_COLORS[place.layer] || "#fff";
-      ctx.lineWidth = selected ? 2.5 : 1.5;
-      ctx.beginPath();
-      ctx.moveTo(base.sx, base.sy);
-      ctx.lineTo(head.sx, head.sy);
-      ctx.stroke();
-      ctx.fillStyle = PIN_COLORS[place.layer] || "#fff";
-      ctx.beginPath();
-      ctx.arc(head.sx, head.sy, selected ? 7 : 4.5, 0, Math.PI * 2);
-      ctx.fill();
-      if (selected) {
-        ctx.strokeStyle = "#1b2430";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.font = "600 13px Outfit, sans-serif";
-        ctx.textAlign = "left";
-        ctx.fillStyle = this.night ? "#f3eee6" : "#1b2430";
-        ctx.fillText(place.name, head.sx + 10, head.sy + 4);
-      }
-    }
-  }
-
-  _trees(parks) {
-    const trees = [];
-    for (const ring of parks) {
-      if (ring.length < 3 || trees.length > 1800) break;
-      let minX = Infinity;
-      let minY = Infinity;
-      let maxX = -Infinity;
-      let maxY = -Infinity;
-      for (const [x, y] of ring) {
-        minX = Math.min(minX, x);
-        minY = Math.min(minY, y);
-        maxX = Math.max(maxX, x);
-        maxY = Math.max(maxY, y);
-      }
-      if (maxX - minX < 40 || maxY - minY < 40) continue;
-      for (let x = minX; x < maxX && trees.length < 1800; x += 34) {
-        for (let y = minY; y < maxY && trees.length < 1800; y += 34) {
-          const jx = x + ((x * 13 + y * 7) % 17) - 8;
-          const jy = y + ((x * 3 + y * 11) % 15) - 7;
-          if (inside(jx, jy, ring)) trees.push([jx, jy]);
-        }
-      }
-    }
-    return trees;
-  }
 }
 
-function inside(x, y, ring) {
-  let hit = false;
-  let j = ring.length - 1;
-  for (let i = 0; i < ring.length; i += 1) {
-    const [xi, yi] = ring[i];
-    const [xj, yj] = ring[j];
-    if ((yi > y) !== (yj > y)) {
-      const cross = ((xj - xi) * (y - yi)) / ((yj - yi) || 1e-9) + xi;
-      if (x < cross) hit = !hit;
-    }
-    j = i;
+function centroid(ring) {
+  let x = 0;
+  let y = 0;
+  for (const p of ring) {
+    x += p[0];
+    y += p[1];
   }
-  return hit;
+  return [x / ring.length, y / ring.length];
 }

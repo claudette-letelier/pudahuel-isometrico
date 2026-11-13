@@ -139,7 +139,7 @@ function showPlace(id, move) {
   document.querySelector("#card-summary").textContent = place.summary;
   document.querySelector("#card-source").textContent = `Fuente: ${place.source}`;
   card.hidden = false;
-  if (move) map.focus(place.x, place.y, Math.max(map.cam.zoom, 1.35));
+  if (move) map.focus(place.x, place.y, Math.max(map.cam.zoom, 5));
   history.replaceState(null, "", `#${place.id}`);
   syncMap();
   renderLayers();
@@ -219,7 +219,7 @@ map.resize();
 frame();
 
 const [city, catalog] = await Promise.all([
-  fetch("data/city.json").then((response) => response.json()),
+  fetch("data/scene.json").then((response) => response.json()),
   fetch("data/places.json").then((response) => response.json()),
 ]);
 
@@ -231,6 +231,6 @@ map.setCity(city);
 syncMap();
 renderLayers();
 renderTours();
-statusEl.textContent = `${city.buildings.length.toLocaleString("es-CL")} edificios · datos © OpenStreetMap`;
+statusEl.textContent = `${city.meta.buildings.toLocaleString("es-CL")} edificios · censo 2017, SRTM y OpenStreetMap`;
 const hash = location.hash.replace("#", "");
 if (hash) showPlace(hash, true);
