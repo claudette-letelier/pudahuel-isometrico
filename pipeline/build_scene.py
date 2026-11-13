@@ -333,6 +333,117 @@ def building_height(tags: dict, area: float) -> float:
     return 4.5
 
 
+def cover_kind_osm(tags: dict) -> str | None:
+    land = tags.get("landuse") or ""
+    natural = tags.get("natural") or ""
+    if land in {"farmland", "farmyard"}:
+        return "farm"
+    if land in {"meadow", "grassland"}:
+        return "meadow"
+    if land == "forest" or natural == "wood":
+        return "forest"
+    if land == "scrub" or natural == "scrub":
+        return "scrub"
+    if land in {"orchard", "vineyard", "allotments"}:
+        return "orchard"
+    return None
+
+
+def cover_kind_conaf(props: dict) -> str | None:
+    text = " ".join(str(props.get(key) or "") for key in ("subuso", "uso", "uso_tierra")).lower()
+    if any(word in text for word in ("urban", "ciudad", "industrial", "miner")):
+        return None
+    if "bosque" in text or "plantaci" in text:
+        return "forest"
+    if "matorral" in text:
+        return "scrub"
+    if any(word in text for word in ("frutal", "huerto", "viña", "vina", "parronal")):
+        return "orchard"
+    if "pradera" in text and "cultivo" not in text and "agric" not in text:
+        return "meadow"
+    if any(word in text for word in ("agric", "cultivo", "rotaci")):
+        return "farm"
+    if any(word in text for word in ("agua", "rio", "río", "humedal", "lago", "embalse")):
+        return "water"
+    return None
+
+
+def load_cover(path: Path, commune: list[list[int]], kind_of) -> list[dict]:
+    if not path.exists():
+        print(f"sin {path.name}")
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    out = []
+    for feature in data.get("features", []):
+        props = feature.get("properties") or {}
+        kind = kind_of(props)
+        if not kind:
+            continue
+        geometry = feature.get("geometry") or {}
+        for ring in ring_of(geometry):
+            cleaned = clean([loc(lon, lat) for lon, lat in ring], 14, 48)
+            if not cleaned:
+                continue
+            area = abs(shoelace([(p[0], p[1]) for p in cleaned]))
+            if area < 800 or not inside(*centroid(cleaned), commune):
+                continue
+            out.append({"k": kind, "p": cleaned, "area": area})
+    print(f"  {path.name}: {len(out)}")
+    return out
+
+
+def scatter_trees(polys: list[dict], parks: list[list[list[int]]], blocks: list[dict], limit: int = 12000) -> list[list]:
+    urban: dict[tuple[int, int], list] = {}
+    for block in blocks:
+        if block["kind"] != "data":
+            continue
+        ring = block["p"]
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        for ix in range(int(min(xs) // 80), int(max(xs) // 80) + 1):
+            for iy in range(int(min(ys) // 80), int(max(ys) // 80) + 1):
+                urban.setdefault((ix, iy), []).append(ring)
+
+    def in_city(x: float, y: float) -> bool:
+        for ring in urban.get((int(x // 80), int(y // 80)), ()):
+            if inside(x, y, ring):
+                return True
+        return False
+
+    trees = []
+    step_of = {"forest": 34, "scrub": 52, "orchard": 16, "park": 22}
+    code = {"forest": 0, "scrub": 1, "orchard": 2, "park": 3}
+
+    def add(ring, kind, area):
+        step = step_of[kind]
+        if kind == "park" and area > 120000:
+            step = 40
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        x = min(xs) + step / 2
+        while x < max(xs) and len(trees) < limit:
+            y = min(ys) + (step / 2 if int(x / step) % 2 == 0 else step)
+            while y < max(ys) and len(trees) < limit:
+                if inside(x, y, ring) and not (kind in {"forest", "scrub"} and in_city(x, y)):
+                    trees.append([round(x), round(y), code[kind]])
+                y += step
+            x += step
+
+    for ring in parks:
+        if len(trees) >= limit:
+            break
+        area = abs(shoelace([(p[0], p[1]) for p in ring]))
+        if 400 < area < 200000:
+            add(ring, "park", area)
+    for kind in ("orchard", "forest", "scrub"):
+        for item in polys:
+            if item["k"] != kind or len(trees) >= limit:
+                continue
+            add(item["p"], kind, item.get("area") or 0)
+    print(f"arboles: {len(trees)}")
+    return trees
+
+
 def generate_houses(blocks: list[dict], occupied: list[tuple[float, float]]) -> list[dict]:
     buckets: dict[tuple[int, int], list[tuple[float, float]]] = {}
     for x, y in occupied:
@@ -431,7 +542,7 @@ def main() -> None:
         })
         occupied.append((cx, cy))
 
-    parks, water, airport, rails, waterways, runways = [], [], [], [], [], []
+    parks, water, airport, rails, waterways, runways, cover = [], [], [], [], [], [], []
 
     def closed(points: list[tuple[float, float]]) -> bool:
         return len(points) > 3 and abs(points[0][0] - points[-1][0]) < 3 and abs(points[0][1] - points[-1][1]) < 3
@@ -470,9 +581,24 @@ def main() -> None:
                 water.append(cleaned)
             elif tags.get("aeroway"):
                 airport.append(cleaned)
-            elif tags.get("leisure") or tags.get("landuse") in {"grass", "forest", "recreation_ground", "cemetery"}:
+            kind = cover_kind_osm(tags)
+            if kind in {"forest", "scrub", "farm", "meadow", "orchard"}:
+                cover.append({
+                    "k": kind,
+                    "p": cleaned,
+                    "area": abs(shoelace([(p[0], p[1]) for p in cleaned])),
+                })
+            elif tags.get("leisure") or tags.get("landuse") in {"grass", "recreation_ground", "cemetery", "village_green"}:
                 parks.append(cleaned)
 
+    for item in load_cover(RAW / "cl" / "conaf_pudahuel.geojson", commune, cover_kind_conaf):
+        if item["k"] == "water":
+            water.append(item["p"])
+        else:
+            cover.append(item)
+    for item in load_cover(RAW / "cl" / "minvu_pudahuel.geojson", commune, lambda _props: "park"):
+        parks.append(item["p"])
+    trees = scatter_trees(cover, parks, blocks)
     houses = generate_houses(blocks, occupied)
     scene = {
         "origin": [LON0, LAT0],
@@ -481,6 +607,8 @@ def main() -> None:
             "osm": len(buildings),
             "houses": len(houses),
             "blocks": len(blocks),
+            "cover": len(cover),
+            "trees": len(trees),
             "z0": relief["z0"],
         },
         "boundary": commune,
@@ -488,6 +616,8 @@ def main() -> None:
         "streets": streets,
         "buildings": buildings,
         "houses": houses,
+        "cover": [{"k": item["k"], "p": item["p"]} for item in cover],
+        "trees": trees,
         "parks": parks,
         "water": water,
         "waterways": waterways,

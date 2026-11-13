@@ -135,7 +135,7 @@ export class IsoMap {
       powerPreference: "high-performance",
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.setClearColor(0xd9d0c2, 1);
+    this.renderer.setClearColor(0x1c2430, 1);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = false;
@@ -348,12 +348,23 @@ export class IsoMap {
     const built = new Bucket();
     const yard = [0.9, 0.86, 0.76];
     const park = [0.56, 0.65, 0.42];
-    const soil = [0.89, 0.84, 0.74];
     const road = [0.95, 0.92, 0.84];
     const apron = [0.8, 0.77, 0.7];
     const rail = [0.42, 0.38, 0.35];
     const blue = [0.45, 0.62, 0.7];
 
+    const coverColor = {
+      farm: [[0.73, 0.75, 0.45], [0.64, 0.7, 0.38]],
+      meadow: [[0.78, 0.77, 0.5]],
+      forest: [[0.38, 0.48, 0.28]],
+      scrub: [[0.56, 0.58, 0.36]],
+      orchard: [[0.5, 0.6, 0.32]],
+    };
+    for (let index = 0; index < (city.cover || []).length; index += 1) {
+      const item = city.cover[index];
+      const choices = coverColor[item.k] || coverColor.meadow;
+      this._drape(ground, item.p, choices[index % choices.length], 0.08);
+    }
     for (const block of city.blocks || []) this._drape(ground, block.p, block.k === "empty" ? park : yard, 0.18);
     for (const ring of city.parks || []) this._drape(ground, ring, park, 0.28);
     for (const ring of city.airport || []) this._drape(ground, ring, apron, 0.16);
@@ -364,7 +375,8 @@ export class IsoMap {
     for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
     for (const ring of city.water || []) this._drape(water, ring, blue, 0.22);
     for (const line of city.waterways || []) this._ribbon(water, line, 6, blue, 0.3);
-    this._trees(ground, city.parks || []);
+    this._skirt(ground, city.boundary, [0.42, 0.36, 0.28]);
+    this._plant(ground, city.trees || []);
 
     for (const building of city.buildings || []) {
       const [cx, cy] = centroid(building.p);
@@ -383,7 +395,7 @@ export class IsoMap {
       polygonOffsetFactor: -1,
       polygonOffsetUnits: -2,
     });
-    this.terrain = this._terrainMesh(soil);
+    this.terrain = this._terrainMesh(city.boundary, ground);
     this.terrain.receiveShadow = true;
     this.ground = ground.mesh(flat);
     this.ground.receiveShadow = true;
@@ -395,40 +407,127 @@ export class IsoMap {
     this.scene.add(this.terrain, this.ground, this.waterMesh, this.buildings);
   }
 
-  _terrainMesh(color) {
+  _soil(height) {
+    const tone = Math.min(1, Math.max(0, height / 220));
+    return [0.86 - tone * 0.34, 0.8 - tone * 0.18, 0.66 - tone * 0.26];
+  }
+
+  _terrainMesh(ring, rim) {
     const { o, s, nx, ny, z } = this.elev;
+    const wide = nx - 1;
+    const high = ny - 1;
+    const mask = new Uint8Array(wide * high);
+    for (let j = 0; j < high; j += 1) {
+      const y = o[1] + (j + 0.5) * s;
+      const cuts = [];
+      for (let i = 0, k = ring.length - 1; i < ring.length; k = i, i += 1) {
+        const a = ring[i];
+        const b = ring[k];
+        if ((a[1] > y) !== (b[1] > y)) cuts.push(a[0] + ((y - a[1]) * (b[0] - a[0])) / (b[1] - a[1]));
+      }
+      cuts.sort((p, q) => p - q);
+      for (let m = 0; m + 1 < cuts.length; m += 2) {
+        const i0 = Math.max(0, Math.ceil((cuts[m] - o[0]) / s - 0.5));
+        const i1 = Math.min(wide - 1, Math.floor((cuts[m + 1] - o[0]) / s - 0.5));
+        for (let i = i0; i <= i1; i += 1) mask[j * wide + i] = 1;
+      }
+    }
+    for (let e = 0; e < ring.length; e += 1) {
+      const a = ring[e];
+      const b = ring[(e + 1) % ring.length];
+      const steps = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / (s * 0.5)));
+      for (let step = 0; step <= steps; step += 1) {
+        const x = a[0] + ((b[0] - a[0]) * step) / steps;
+        const y = a[1] + ((b[1] - a[1]) * step) / steps;
+        const i = Math.floor((x - o[0]) / s);
+        const j = Math.floor((y - o[1]) / s);
+        if (i >= 0 && j >= 0 && i < wide && j < high) mask[j * wide + i] = 2;
+      }
+    }
     const pos = new Float32Array(nx * ny * 3);
     const col = new Float32Array(nx * ny * 3);
     for (let j = 0; j < ny; j += 1) {
       for (let i = 0; i < nx; i += 1) {
         const k = (j * nx + i) * 3;
+        const height = z[j * nx + i];
+        const tone = this._soil(height);
         pos[k] = o[0] + i * s;
-        pos[k + 1] = z[j * nx + i];
+        pos[k + 1] = height;
         pos[k + 2] = -(o[1] + j * s);
-        col[k] = color[0];
-        col[k + 1] = color[1];
-        col[k + 2] = color[2];
+        col[k] = tone[0];
+        col[k + 1] = tone[1];
+        col[k + 2] = tone[2];
       }
     }
-    const idx = new Uint32Array((nx - 1) * (ny - 1) * 6);
-    let t = 0;
-    for (let j = 0; j < ny - 1; j += 1) {
-      for (let i = 0; i < nx - 1; i += 1) {
-        const a = j * nx + i;
-        idx[t++] = a;
-        idx[t++] = a + 1;
-        idx[t++] = a + nx + 1;
-        idx[t++] = a;
-        idx[t++] = a + nx + 1;
-        idx[t++] = a + nx;
+    const idx = [];
+    for (let j = 0; j < high; j += 1) {
+      for (let i = 0; i < wide; i += 1) {
+        const flag = mask[j * wide + i];
+        if (flag === 1) {
+          const a = j * nx + i;
+          idx.push(a, a + 1, a + nx + 1, a, a + nx + 1, a + nx);
+        } else if (flag === 2) {
+          const x0 = o[0] + i * s;
+          const y0 = o[1] + j * s;
+          const clipped = clipToRect(ring, x0, y0, x0 + s, y0 + s);
+          if (clipped.length < 3) continue;
+          let faces = [];
+          try {
+            faces = THREE.ShapeUtils.triangulateShape(clipped.map(([x, y]) => new THREE.Vector2(x, y)), []);
+          } catch {
+            continue;
+          }
+          const verts = clipped.map(([x, y]) => {
+            const height = this._height(x, y);
+            return [x, height, -y, this._soil(height)];
+          });
+          for (const [a, b, c] of faces) {
+            rim.up(verts[a].slice(0, 3), verts[b].slice(0, 3), verts[c].slice(0, 3), verts[a].slice(3));
+          }
+        }
       }
     }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     geometry.setAttribute("color", new THREE.BufferAttribute(col, 3));
-    geometry.setIndex(new THREE.BufferAttribute(idx, 1));
+    geometry.setIndex(idx);
     geometry.computeVertexNormals();
     return new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  }
+
+  _skirt(bucket, ring, color) {
+    if (!ring || ring.length < 2) return;
+    for (let i = 0; i < ring.length; i += 1) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      const ha = this._height(a[0], a[1]);
+      const hb = this._height(b[0], b[1]);
+      const drop = 70;
+      bucket.tri([a[0], ha, -a[1]], [b[0], hb, -b[1]], [b[0], hb - drop, -b[1]], color);
+      bucket.tri([a[0], ha, -a[1]], [b[0], hb - drop, -b[1]], [a[0], ha - drop, -a[1]], color);
+    }
+  }
+
+  _plant(bucket, trees) {
+    const leaf = [
+      [0.24, 0.38, 0.18],
+      [0.4, 0.46, 0.22],
+      [0.32, 0.48, 0.2],
+      [0.28, 0.46, 0.24],
+    ];
+    for (const [x, y, kind] of trees) {
+      const height = this._height(x, y);
+      const crown = kind === 1 ? 4.2 : kind === 2 ? 5.5 : 8;
+      const radius = kind === 1 ? 2.2 : kind === 2 ? 2.4 : 3.4;
+      const color = leaf[kind] || leaf[0];
+      const tip = [x, height + crown, -y];
+      const base = [];
+      for (let i = 0; i < 4; i += 1) {
+        const angle = (i * Math.PI) / 2 + 0.4;
+        base.push([x + Math.cos(angle) * radius, height + crown * 0.28, -(y + Math.sin(angle) * radius)]);
+      }
+      for (let i = 0; i < 4; i += 1) bucket.tri(base[i], base[(i + 1) % 4], tip, color);
+    }
   }
 
   _drape(bucket, ring, color, lift) {
@@ -643,7 +742,7 @@ export class IsoMap {
 
   _applyNight() {
     this._paintedNight = this.night;
-    this.renderer.setClearColor(this.night ? 0x141b26 : 0xd9d0c2, 1);
+    this.renderer.setClearColor(this.night ? 0x101820 : 0x1c2430, 1);
     this.hemi.color.set(this.night ? 0x243044 : 0xf4f1e6);
     this.hemi.groundColor.set(this.night ? 0x141810 : 0x8e8a70);
     this.hemi.intensity = this.night ? 0.22 : 0.5;
@@ -797,6 +896,34 @@ export class IsoMap {
     }
     this.onSelect(best ? best.id : null);
   }
+}
+
+function clipToRect(poly, x0, y0, x1, y1) {
+  const planes = [
+    [(p) => p[0] >= x0, (a, b) => [x0, a[1] + ((b[1] - a[1]) * (x0 - a[0])) / (b[0] - a[0] || 1e-9)]],
+    [(p) => p[0] <= x1, (a, b) => [x1, a[1] + ((b[1] - a[1]) * (x1 - a[0])) / (b[0] - a[0] || 1e-9)]],
+    [(p) => p[1] >= y0, (a, b) => [a[0] + ((b[0] - a[0]) * (y0 - a[1])) / (b[1] - a[1] || 1e-9), y0]],
+    [(p) => p[1] <= y1, (a, b) => [a[0] + ((b[0] - a[0]) * (y1 - a[1])) / (b[1] - a[1] || 1e-9), y1]],
+  ];
+  let out = poly;
+  for (const [inside, hit] of planes) {
+    if (out.length < 3) return [];
+    const next = [];
+    for (let i = 0; i < out.length; i += 1) {
+      const a = out[i];
+      const b = out[(i + 1) % out.length];
+      const ina = inside(a);
+      const inb = inside(b);
+      if (ina && inb) next.push(b);
+      else if (ina && !inb) next.push(hit(a, b));
+      else if (!ina && inb) {
+        next.push(hit(a, b));
+        next.push(b);
+      }
+    }
+    out = next;
+  }
+  return out;
 }
 
 function centroid(ring) {
