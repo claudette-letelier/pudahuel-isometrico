@@ -231,6 +231,6 @@ map.setCity(city);
 syncMap();
 renderLayers();
 renderTours();
-statusEl.textContent = `${city.meta.buildings.toLocaleString("es-CL")} edificios · censo 2017, SRTM y OpenStreetMap`;
+statusEl.textContent = `${city.meta.buildings.toLocaleString("es-CL")} edificios · censos 2017 y 2024, SRTM y OpenStreetMap`;
 const hash = location.hash.replace("#", "");
 if (hash) showPlace(hash, true);

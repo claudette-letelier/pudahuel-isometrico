@@ -315,6 +315,21 @@ export class IsoMap {
     this.elev = { o: elev.o, s: elev.s, nx, ny, z };
   }
 
+  _inRing(x, y) {
+    const ring = this.city?.boundary;
+    if (!ring?.length) return true;
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+      const yi = ring[i][1];
+      const yj = ring[j][1];
+      if ((yi > y) !== (yj > y)) {
+        const xCross = ((ring[j][0] - ring[i][0]) * (y - yi)) / (yj - yi || 1e-9) + ring[i][0];
+        if (x < xCross) inside = !inside;
+      }
+    }
+    return inside;
+  }
+
   _height(x, y) {
     const elev = this.elev;
     if (!elev) return 0;
@@ -337,7 +352,7 @@ export class IsoMap {
   }
 
   _build(city) {
-    for (const mesh of [this.terrain, this.ground, this.waterMesh, this.buildings]) {
+    for (const mesh of [this.terrain, this.edge, this.ground, this.waterMesh, this.buildings]) {
       if (!mesh) continue;
       this.scene.remove(mesh);
       mesh.geometry.dispose();
@@ -375,8 +390,8 @@ export class IsoMap {
     for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
     for (const ring of city.water || []) this._drape(water, ring, blue, 0.22);
     for (const line of city.waterways || []) this._ribbon(water, line, 6, blue, 0.3);
-    this._skirt(ground, city.boundary, [0.42, 0.36, 0.28]);
     this._plant(ground, city.trees || []);
+    this.edge = this._edgeWall(city.boundary);
 
     for (const building of city.buildings || []) {
       const [cx, cy] = centroid(building.p);
@@ -404,7 +419,7 @@ export class IsoMap {
     this.buildings = built.mesh(windowMaterial(this.uni));
     this.buildings.castShadow = true;
     this.buildings.receiveShadow = true;
-    this.scene.add(this.terrain, this.ground, this.waterMesh, this.buildings);
+    this.scene.add(this.terrain, this.edge, this.ground, this.waterMesh, this.buildings);
   }
 
   _soil(height) {
@@ -495,17 +510,66 @@ export class IsoMap {
     return new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ vertexColors: true }));
   }
 
-  _skirt(bucket, ring, color) {
-    if (!ring || ring.length < 2) return;
+  _edgeWall(ring) {
+    const { o, s } = this.elev;
+    const cutsOf = (a, b) => {
+      const ts = [0, 1];
+      for (const axis of [0, 1]) {
+        const u = (a[axis] - o[axis]) / s;
+        const v = (b[axis] - o[axis]) / s;
+        const span = v - u;
+        if (Math.abs(span) < 1e-9) continue;
+        const lo = Math.min(u, v);
+        const hi = Math.max(u, v);
+        for (let k = Math.floor(lo) + 1; k < hi; k += 1) ts.push((k - u) / span);
+      }
+      ts.sort((p, q) => p - q);
+      const unique = [];
+      for (const t of ts) {
+        if (!unique.length || t - unique[unique.length - 1] > 1e-4) unique.push(Math.min(1, Math.max(0, t)));
+      }
+      return unique.map((t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    };
+    let floor = Infinity;
+    for (const [x, y] of ring) floor = Math.min(floor, this._height(x, y));
+    const base = floor - 48;
+    const wall = new Bucket();
+    const topsoil = [0.37, 0.27, 0.18];
+    const soil = [0.54, 0.42, 0.3];
+    const stratum = [0.4, 0.3, 0.2];
     for (let i = 0; i < ring.length; i += 1) {
-      const a = ring[i];
-      const b = ring[(i + 1) % ring.length];
-      const ha = this._height(a[0], a[1]);
-      const hb = this._height(b[0], b[1]);
-      const drop = 70;
-      bucket.tri([a[0], ha, -a[1]], [b[0], hb, -b[1]], [b[0], hb - drop, -b[1]], color);
-      bucket.tri([a[0], ha, -a[1]], [b[0], hb - drop, -b[1]], [a[0], ha - drop, -a[1]], color);
+      const start = ring[i];
+      const end = ring[(i + 1) % ring.length];
+      const points = cutsOf(start, end);
+      for (let m = 0; m < points.length - 1; m += 1) {
+        const a = points[m];
+        const b = points[m + 1];
+        const dx = b[0] - a[0];
+        const dy = b[1] - a[1];
+        if (Math.hypot(dx, dy) < 0.4) continue;
+        const ha = this._height(a[0], a[1]);
+        const hb = this._height(b[0], b[1]);
+        const band = (lowA, lowB, highA, highB, color) => {
+          this._wall(
+            wall,
+            [a[0], lowA, -a[1]],
+            [b[0], lowB, -b[1]],
+            [b[0], highB, -b[1]],
+            [a[0], highA, -a[1]],
+            color,
+            dy,
+            dx,
+          );
+        };
+        band(ha - 3.5, hb - 3.5, ha, hb, topsoil);
+        band(base + 16, base + 16, ha - 3.5, hb - 3.5, soil);
+        band(base + 7, base + 7, base + 16, base + 16, stratum);
+        band(base, base, base + 7, base + 7, soil);
+      }
     }
+    const mesh = wall.mesh(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+    mesh.receiveShadow = true;
+    return mesh;
   }
 
   _plant(bucket, trees) {
@@ -562,6 +626,7 @@ export class IsoMap {
       right.push([x + dy * width * 0.5, h, -(y - dx * width * 0.5)]);
     }
     for (let i = 0; i < pts.length - 1; i += 1) {
+      if (!this._inRing(pts[i][0], pts[i][1]) || !this._inRing(pts[i + 1][0], pts[i + 1][1])) continue;
       bucket.up(left[i], right[i], right[i + 1], color);
       bucket.up(left[i], right[i + 1], left[i + 1], color);
     }

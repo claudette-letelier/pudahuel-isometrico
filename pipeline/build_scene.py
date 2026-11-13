@@ -16,6 +16,8 @@ import array
 import gzip
 import json
 import math
+import sqlite3
+import struct
 import sys
 from pathlib import Path
 
@@ -178,7 +180,7 @@ def boundary_ring() -> list[list[int]]:
         else:
             break
     projected = [loc(lon, lat) for lon, lat in ring]
-    cleaned = clean(projected, 12, 900)
+    cleaned = clean(projected, 5, 1400)
     if not cleaned:
         raise SystemExit("no pude armar el límite")
     return cleaned
@@ -444,6 +446,109 @@ def scatter_trees(polys: list[dict], parks: list[list[list[int]]], blocks: list[
     return trees
 
 
+def gpkg_rings(blob: bytes) -> list[list[tuple[float, float]]]:
+    if not blob or blob[:2] != b"GP":
+        return []
+    envelope = (blob[3] >> 1) & 7
+    start = 8 + {0: 0, 1: 32, 2: 48, 3: 48, 4: 64}.get(envelope, 0)
+    rings: list[list[tuple[float, float]]] = []
+
+    def read(offset: int) -> int:
+        order = "<" if blob[offset] == 1 else ">"
+        kind = struct.unpack_from(order + "I", blob, offset + 1)[0]
+        offset += 5
+        dims = 2
+        if kind & 0x80000000:
+            dims += 1
+        if kind & 0x40000000:
+            dims += 1
+        kind &= 0xFFFF
+        if kind >= 1000:
+            dims = 4 if kind >= 3000 else 3
+            kind %= 1000
+        count = struct.unpack_from(order + "I", blob, offset)[0]
+        offset += 4
+        if kind == 3:
+            for _ in range(count):
+                points = struct.unpack_from(order + "I", blob, offset)[0]
+                offset += 4
+                ring = []
+                for _point in range(points):
+                    pair = struct.unpack_from(order + "dd", blob, offset)
+                    ring.append((pair[0], pair[1]))
+                    offset += 8 * dims
+                if len(ring) >= 4:
+                    rings.append(ring)
+            return offset
+        if kind == 6:
+            for _ in range(count):
+                offset = read(offset)
+            return offset
+        raise ValueError(f"geometría {kind}")
+
+    read(start)
+    return rings
+
+
+def merge_census_2024(blocks: list[dict], commune: list[list[int]]) -> list[dict]:
+    path = RAW / "census" / "Cartografia_censo2024_R13.gpkg"
+    if not path.exists():
+        print("sin censo 2024")
+        return blocks
+    cells: dict[tuple[int, int], list[dict]] = {}
+    for block in blocks:
+        ring = block["p"]
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        for ix in range(int(min(xs) // 80), int(max(xs) // 80) + 1):
+            for iy in range(int(min(ys) // 80), int(max(ys) // 80) + 1):
+                cells.setdefault((ix, iy), []).append(block)
+
+    def holder(x: float, y: float) -> dict | None:
+        for block in cells.get((int(x // 80), int(y // 80)), ()):
+            if inside(x, y, block["p"]):
+                return block
+        return None
+
+    added = upgraded = 0
+    db = sqlite3.connect(path)
+    rows = db.execute(
+        "select SHAPE, n_vp, n_per from Manzanas_CPV24 where CAST(CUT AS TEXT)='13124' and n_vp > 0"
+    )
+    for blob, viv_raw, pers_raw in rows:
+        viv = int(viv_raw or 0)
+        if viv < 2:
+            continue
+        for lonlat in gpkg_rings(blob):
+            cleaned = clean([loc(lon, lat) for lon, lat in lonlat], 2.5, 24)
+            if not cleaned:
+                continue
+            area = abs(shoelace([(p[0], p[1]) for p in cleaned]))
+            if area < 400:
+                continue
+            cx, cy = centroid(cleaned)
+            if not inside(cx, cy, commune):
+                continue
+            density = viv / max(area / 10000, 0.05)
+            if density < 8 and not (viv >= 2 and area <= 20000):
+                continue
+            host = holder(cx, cy)
+            if host and host["kind"] == "data":
+                continue
+            if host and host["kind"] == "empty":
+                host["kind"] = "data"
+                host["viv"] = max(host.get("viv", 0), viv)
+                host["pers"] = int(pers_raw or 0)
+                upgraded += 1
+                continue
+            block = {"p": cleaned, "viv": viv, "pers": int(pers_raw or 0), "kind": "data", "area": area}
+            blocks.append(block)
+            cells.setdefault((int(cx // 80), int(cy // 80)), []).append(block)
+            added += 1
+    print(f"censo 2024: {added} manzanas nuevas, {upgraded} sin información de 2017 ahora construidas")
+    return blocks
+
+
 def generate_houses(blocks: list[dict], occupied: list[tuple[float, float]]) -> list[dict]:
     buckets: dict[tuple[int, int], list[tuple[float, float]]] = {}
     for x, y in occupied:
@@ -492,6 +597,29 @@ def generate_houses(blocks: list[dict], occupied: list[tuple[float, float]]) -> 
                     })
                     placed += 1
                 cursor += 12
+        target = min(56, max(placed, int(block["viv"] * 0.55)))
+        if placed < target and 1800 <= block["area"] <= 70000:
+            xs = [p[0] for p in ring]
+            ys = [p[1] for p in ring]
+            step = 13
+            row = 0
+            x = min(xs) + 16
+            while x < max(xs) - 12 and placed < target and len(houses) < 36000:
+                y = min(ys) + 16 + (6 if row % 2 else 0)
+                while y < max(ys) - 12 and placed < target and len(houses) < 36000:
+                    if inside(x, y, ring) and not near(x, y):
+                        houses.append({
+                            "c": [round(x, 1), round(y, 1)],
+                            "a": 0.2,
+                            "w": 8,
+                            "d": 9,
+                            "h": height,
+                            "r": (len(houses) // 3) % 3,
+                        })
+                        placed += 1
+                    y += step
+                x += step
+                row += 1
     print(f"casas generadas: {len(houses)}")
     return houses
 
@@ -500,6 +628,7 @@ def main() -> None:
     commune = boundary_ring()
     blocks = load_blocks(RAW / "census" / "R13_MANZANA_IND_C17.shp.geojson", "data", commune)
     blocks += load_blocks(RAW / "census" / "R13_MANZANA_SIN_INF_C17.shp.geojson", "empty", commune)
+    blocks = merge_census_2024(blocks, commune)
     relief = elevation(commune)
 
     streets = []
