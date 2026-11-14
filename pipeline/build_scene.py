@@ -348,6 +348,8 @@ def cover_kind_osm(tags: dict) -> str | None:
         return "scrub"
     if land in {"orchard", "vineyard", "allotments"}:
         return "orchard"
+    if land in {"industrial", "commercial", "retail", "construction", "quarry", "brownfield"}:
+        return "yard"
     return None
 
 
@@ -711,7 +713,7 @@ def main() -> None:
             elif tags.get("aeroway"):
                 airport.append(cleaned)
             kind = cover_kind_osm(tags)
-            if kind in {"forest", "scrub", "farm", "meadow", "orchard"}:
+            if kind in {"forest", "scrub", "farm", "meadow", "orchard", "yard"}:
                 cover.append({
                     "k": kind,
                     "p": cleaned,

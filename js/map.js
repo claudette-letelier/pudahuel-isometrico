@@ -361,35 +361,41 @@ export class IsoMap {
     const ground = new Bucket();
     const water = new Bucket();
     const built = new Bucket();
-    const yard = [0.9, 0.86, 0.76];
-    const park = [0.56, 0.65, 0.42];
-    const road = [0.95, 0.92, 0.84];
+    const yard = [0.74, 0.68, 0.56];
+    const park = [0.5, 0.62, 0.36];
+    const road = [0.97, 0.95, 0.88];
     const apron = [0.8, 0.77, 0.7];
     const rail = [0.42, 0.38, 0.35];
     const blue = [0.45, 0.62, 0.7];
 
     const coverColor = {
-      farm: [[0.73, 0.75, 0.45], [0.64, 0.7, 0.38]],
-      meadow: [[0.78, 0.77, 0.5]],
-      forest: [[0.38, 0.48, 0.28]],
-      scrub: [[0.56, 0.58, 0.36]],
-      orchard: [[0.5, 0.6, 0.32]],
+      farm: [[0.78, 0.76, 0.46], [0.62, 0.7, 0.36], [0.7, 0.64, 0.38]],
+      meadow: [[0.74, 0.78, 0.48], [0.64, 0.72, 0.4]],
+      forest: [[0.32, 0.46, 0.26]],
+      scrub: [[0.58, 0.62, 0.34]],
+      orchard: [[0.5, 0.64, 0.3], [0.42, 0.56, 0.28]],
+      yard: [[0.66, 0.64, 0.58], [0.58, 0.56, 0.52]],
     };
     for (let index = 0; index < (city.cover || []).length; index += 1) {
       const item = city.cover[index];
       const choices = coverColor[item.k] || coverColor.meadow;
-      this._drape(ground, item.p, choices[index % choices.length], 0.08);
+      if (item.k === "farm" || item.k === "meadow" || item.k === "orchard") {
+        this._field(ground, item.p, choices, 0.08, index);
+      } else {
+        this._drape(ground, item.p, choices[index % choices.length], 0.08);
+      }
     }
     for (const block of city.blocks || []) this._drape(ground, block.p, block.k === "empty" ? park : yard, 0.18);
     for (const ring of city.parks || []) this._drape(ground, ring, park, 0.28);
     for (const ring of city.airport || []) this._drape(ground, ring, apron, 0.16);
     for (const street of city.streets || []) {
-      this._ribbon(ground, street.p, WIDTHS[street.k] || 3.2, road, 0.45);
+      const pale = street.k <= 1 ? [0.99, 0.97, 0.9] : road;
+      this._ribbon(ground, street.p, WIDTHS[street.k] || 3.2, pale, 0.45);
     }
     for (const line of city.rails || []) this._ribbon(ground, line, 3.2, rail, 0.5);
     for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
     for (const ring of city.water || []) this._drape(water, ring, blue, 0.22);
-    for (const line of city.waterways || []) this._ribbon(water, line, 6, blue, 0.3);
+    for (const line of city.waterways || []) this._ribbon(water, line, 16, blue, 0.3);
     this.edge = this._edgeWall(city.boundary);
 
     for (const building of city.buildings || []) {
@@ -423,9 +429,15 @@ export class IsoMap {
     if (this.trees) this.scene.add(this.trees);
   }
 
-  _soil(height) {
-    const tone = Math.min(1, Math.max(0, height / 220));
-    return [0.86 - tone * 0.34, 0.8 - tone * 0.18, 0.66 - tone * 0.26];
+  _soil(height, salt = 0) {
+    const hi = Math.min(1, Math.max(0, height / 70));
+    const low = salt > 0 ? [0.66, 0.72, 0.38] : [0.8, 0.76, 0.48];
+    const high = [0.34, 0.48, 0.26];
+    return [
+      low[0] * (1 - hi) + high[0] * hi,
+      low[1] * (1 - hi) + high[1] * hi,
+      low[2] * (1 - hi) + high[2] * hi,
+    ];
   }
 
   _terrainMesh(ring, rim) {
@@ -466,7 +478,8 @@ export class IsoMap {
       for (let i = 0; i < nx; i += 1) {
         const k = (j * nx + i) * 3;
         const height = z[j * nx + i];
-        const tone = this._soil(height);
+        const salt = Math.sin(i * 0.37 + j * 0.21) * Math.cos(i * 0.11 - j * 0.17);
+        const tone = this._soil(height, salt);
         pos[k] = o[0] + i * s;
         pos[k + 1] = height;
         pos[k + 2] = -(o[1] + j * s);
@@ -598,7 +611,7 @@ export class IsoMap {
       const scale = (kind === 1 ? 0.55 : kind === 2 ? 0.78 : 1) * (0.82 + spin * 0.36);
       dummy.position.set(x, this._height(x, y), -y);
       dummy.rotation.set(0, spin * Math.PI * 2, 0);
-      dummy.scale.set(scale, scale * (kind === 0 ? 1.12 : 0.92 + spin * 0.2), scale);
+      dummy.scale.set(scale, scale * (kind === 0 ? 1.45 : 0.92 + spin * 0.2), scale);
       dummy.updateMatrix();
       mesh.setMatrixAt(i, dummy.matrix);
     }
@@ -631,6 +644,31 @@ export class IsoMap {
       else outside = middle;
     }
     return left ? [a, inside] : [inside, b];
+  }
+
+  _field(bucket, ring, colors, lift, seed) {
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const [x, y] of ring) {
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+    const alongX = maxX - minX >= maxY - minY;
+    const start = alongX ? minX : minY;
+    const end = alongX ? maxX : maxY;
+    if (end - start < 80) {
+      this._drape(bucket, ring, colors[seed % colors.length], lift);
+      return;
+    }
+    const band = end - start > 500 ? 72 : 48;
+    for (let cursor = start, index = seed; cursor < end - 4; cursor += band, index += 1) {
+      const piece = clipBand(ring, alongX ? 0 : 1, cursor, Math.min(end, cursor + band));
+      if (piece.length >= 3) this._drape(bucket, piece, colors[index % colors.length], lift);
+    }
   }
 
   _drape(bucket, ring, color, lift) {
@@ -997,6 +1035,34 @@ export class IsoMap {
     }
     this.onSelect(best ? best.id : null);
   }
+}
+
+function clipBand(poly, axis, start, end) {
+  const inside = (point, limit, keepBelow) => (keepBelow ? point[axis] <= limit : point[axis] >= limit);
+  const cut = (a, b, limit) => {
+    const span = b[axis] - a[axis] || 1e-9;
+    const t = (limit - a[axis]) / span;
+    return axis === 0 ? [limit, a[1] + (b[1] - a[1]) * t] : [a[0] + (b[0] - a[0]) * t, limit];
+  };
+  let out = poly;
+  for (const [limit, keepBelow] of [[start, false], [end, true]]) {
+    if (out.length < 3) return [];
+    const next = [];
+    for (let i = 0; i < out.length; i += 1) {
+      const a = out[i];
+      const b = out[(i + 1) % out.length];
+      const ina = inside(a, limit, keepBelow);
+      const inb = inside(b, limit, keepBelow);
+      if (ina && inb) next.push(b);
+      else if (ina && !inb) next.push(cut(a, b, limit));
+      else if (!ina && inb) {
+        next.push(cut(a, b, limit));
+        next.push(b);
+      }
+    }
+    out = next;
+  }
+  return out;
 }
 
 function roundTreeGeometry() {
