@@ -551,6 +551,38 @@ def merge_census_2024(blocks: list[dict], commune: list[list[int]]) -> list[dict
     return blocks
 
 
+def absorb_rural(commune, buildings, occupied, cover) -> None:
+    path = RAW / "rural.json"
+    if not path.exists():
+        print("sin invernaderos ni potreros de OSM")
+        return
+    green = plots = pits = 0
+    for element in json.loads(path.read_text(encoding="utf-8")).get("elements", []):
+        tags = element.get("tags") or {}
+        geometry = element.get("geometry")
+        if not geometry:
+            continue
+        cleaned = clean([loc(point["lon"], point["lat"]) for point in geometry], 2.5, 20)
+        if not cleaned:
+            continue
+        center = centroid(cleaned)
+        if not inside(center[0], center[1], commune):
+            continue
+        area = abs(shoelace([(point[0], point[1]) for point in cleaned]))
+        land = tags.get("landuse") or ""
+        if tags.get("building") == "greenhouse" or land == "greenhouse":
+            buildings.append({"p": cleaned, "h": 3.2, "r": 0, "g": 1})
+            occupied.append(center)
+            green += 1
+        elif land == "quarry":
+            cover.append({"k": "pit", "p": cleaned, "area": area})
+            pits += 1
+        elif land in {"farmland", "orchard", "vineyard"}:
+            cover.append({"k": "orchard" if land == "orchard" else "farm", "p": cleaned, "area": area})
+            plots += 1
+    print(f"osm rural: {green} invernaderos, {plots} potreros, {pits} canteras")
+
+
 def generate_houses(blocks: list[dict], occupied: list[tuple[float, float]]) -> list[dict]:
     buckets: dict[tuple[int, int], list[tuple[float, float]]] = {}
     for x, y in occupied:
@@ -729,6 +761,7 @@ def main() -> None:
             cover.append(item)
     for item in load_cover(RAW / "cl" / "minvu_pudahuel.geojson", commune, lambda _props: "park"):
         parks.append(item["p"])
+    absorb_rural(commune, buildings, occupied, cover)
     trees = scatter_trees(cover, parks, blocks)
     houses = generate_houses(blocks, occupied)
     scene = {

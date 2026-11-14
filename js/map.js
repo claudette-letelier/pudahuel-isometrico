@@ -370,20 +370,24 @@ export class IsoMap {
 
     const coverColor = {
       farm: [[0.78, 0.76, 0.46], [0.62, 0.7, 0.36], [0.7, 0.64, 0.38]],
-      meadow: [[0.74, 0.78, 0.48], [0.64, 0.72, 0.4]],
-      forest: [[0.32, 0.46, 0.26]],
-      scrub: [[0.58, 0.62, 0.34]],
-      orchard: [[0.5, 0.64, 0.3], [0.42, 0.56, 0.28]],
+      meadow: [[0.7, 0.62, 0.42]],
+      forest: [[0.4, 0.42, 0.26]],
+      scrub: [[0.55, 0.44, 0.32]],
+      orchard: [[0.36, 0.55, 0.28], [0.7, 0.6, 0.4], [0.6, 0.44, 0.4], [0.76, 0.68, 0.46]],
       yard: [[0.66, 0.64, 0.58], [0.58, 0.56, 0.52]],
+      pit: [[0.82, 0.8, 0.72]],
     };
+    const plots = [
+      [0.32, 0.55, 0.26],
+      [0.74, 0.64, 0.42],
+      [0.56, 0.66, 0.32],
+      [0.64, 0.44, 0.4],
+      [0.8, 0.72, 0.5],
+    ];
     for (let index = 0; index < (city.cover || []).length; index += 1) {
       const item = city.cover[index];
-      const choices = coverColor[item.k] || coverColor.meadow;
-      if (item.k === "farm" || item.k === "meadow" || item.k === "orchard") {
-        this._field(ground, item.p, choices, 0.08, index);
-      } else {
-        this._drape(ground, item.p, choices[index % choices.length], 0.08);
-      }
+      if (item.k === "farm" || item.k === "orchard") this._plots(ground, item.p, plots, 0.08);
+      else this._drape(ground, item.p, (coverColor[item.k] || coverColor.meadow)[index % (coverColor[item.k] || coverColor.meadow).length], 0.08);
     }
     for (const block of city.blocks || []) this._drape(ground, block.p, block.k === "empty" ? park : yard, 0.18);
     for (const ring of city.parks || []) this._drape(ground, ring, park, 0.28);
@@ -395,13 +399,18 @@ export class IsoMap {
     for (const line of city.rails || []) this._ribbon(ground, line, 3.2, rail, 0.5);
     for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
     for (const ring of city.water || []) this._drape(water, ring, blue, 0.22);
-    for (const line of city.waterways || []) this._ribbon(water, line, 16, blue, 0.3);
+    for (const line of city.waterways || []) {
+      this._ribbon(ground, line, 36, [0.28, 0.4, 0.22], 0.16);
+      this._ribbon(water, line, 6, blue, 0.32);
+    }
     this.edge = this._edgeWall(city.boundary);
 
     for (const building of city.buildings || []) {
       const [cx, cy] = centroid(building.p);
       const base = this._height(cx, cy) - 1.2;
-      this._prism(built, building.p, base, building.h + 1.2, ROOF[building.r % 4], WALL[building.r % 4]);
+      const roof = building.g ? [0.94, 0.95, 0.92] : ROOF[building.r % 4];
+      const wall = building.g ? [0.86, 0.88, 0.84] : WALL[building.r % 4];
+      this._prism(built, building.p, base, building.h + 1.2, roof, wall);
     }
     for (const house of city.houses || []) {
       const base = this._height(house.c[0], house.c[1]) - 0.8;
@@ -430,9 +439,9 @@ export class IsoMap {
   }
 
   _soil(height, salt = 0) {
-    const hi = Math.min(1, Math.max(0, height / 70));
-    const low = salt > 0 ? [0.66, 0.72, 0.38] : [0.8, 0.76, 0.48];
-    const high = [0.34, 0.48, 0.26];
+    const hi = Math.min(1, Math.max(0, height / 80));
+    const low = salt > 0.2 ? [0.76, 0.66, 0.44] : [0.7, 0.58, 0.4];
+    const high = [0.58, 0.46, 0.34];
     return [
       low[0] * (1 - hi) + high[0] * hi,
       low[1] * (1 - hi) + high[1] * hi,
@@ -646,7 +655,7 @@ export class IsoMap {
     return left ? [a, inside] : [inside, b];
   }
 
-  _field(bucket, ring, colors, lift, seed) {
+  _plots(bucket, ring, colors, lift) {
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
@@ -657,17 +666,17 @@ export class IsoMap {
       maxX = Math.max(maxX, x);
       maxY = Math.max(maxY, y);
     }
-    const alongX = maxX - minX >= maxY - minY;
-    const start = alongX ? minX : minY;
-    const end = alongX ? maxX : maxY;
-    if (end - start < 80) {
-      this._drape(bucket, ring, colors[seed % colors.length], lift);
-      return;
-    }
-    const band = end - start > 500 ? 72 : 48;
-    for (let cursor = start, index = seed; cursor < end - 4; cursor += band, index += 1) {
-      const piece = clipBand(ring, alongX ? 0 : 1, cursor, Math.min(end, cursor + band));
-      if (piece.length >= 3) this._drape(bucket, piece, colors[index % colors.length], lift);
+    const step = 68;
+    for (let x = minX; x < maxX; x += step) {
+      for (let y = minY; y < maxY; y += step) {
+        const cx = x + step / 2;
+        const cy = y + step / 2;
+        if (!this._inRing(cx, cy) || this._height(cx, cy) > 42) continue;
+        const piece = clipToRect(ring, x, y, x + step, y + step);
+        if (piece.length < 3) continue;
+        const tone = colors[Math.abs(Math.floor(cx / 55) * 13 + Math.floor(cy / 47)) % colors.length];
+        this._drape(bucket, piece, tone, lift);
+      }
     }
   }
 
