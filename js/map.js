@@ -15,7 +15,7 @@ const WALL = [
   [0.77, 0.76, 0.74],
   [0.82, 0.72, 0.65],
 ];
-const WIDTHS = [16, 13, 11, 9.5, 7, 5, 3.5, 3.2];
+const WIDTHS = [18, 15, 13, 11, 8.5, 7, 5.5, 5];
 
 export const PIN_COLORS = {
   tribunales: "#e07a5f",
@@ -394,7 +394,7 @@ export class IsoMap {
     for (const ring of city.airport || []) this._drape(ground, ring, apron, 0.16);
     for (const street of city.streets || []) {
       const pale = street.k <= 1 ? [0.99, 0.97, 0.9] : road;
-      this._ribbon(ground, street.p, WIDTHS[street.k] || 3.2, pale, 0.45);
+      this._ribbon(ground, street.p, WIDTHS[street.k] || 5, pale, 0.7);
     }
     for (const line of city.rails || []) this._ribbon(ground, line, 3.2, rail, 0.5);
     for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
@@ -641,10 +641,8 @@ export class IsoMap {
   _roadSpan(a, b) {
     const left = this._onRoad(a);
     const right = this._onRoad(b);
-    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-    if (left && right && this._onRoad(mid)) return [a, b];
+    if (left && right) return [a, b];
     if (!left && !right) return null;
-    if (left && right) return null;
     let inside = left ? a : b;
     let outside = left ? b : a;
     for (let step = 0; step < 10; step += 1) {
@@ -693,25 +691,52 @@ export class IsoMap {
     for (const [i, j, k] of faces) bucket.up(verts[i], verts[j], verts[k], color);
   }
 
+  _roadQuad(bucket, ax, ay, bx, by, width, color, lift) {
+    let dx = bx - ax;
+    let dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len;
+    dy /= len;
+    const ha = this._height(ax, ay) + lift;
+    const hb = this._height(bx, by) + lift;
+    const leftA = [ax - dy * width * 0.5, ha, -(ay + dx * width * 0.5)];
+    const rightA = [ax + dy * width * 0.5, ha, -(ay - dx * width * 0.5)];
+    const leftB = [bx - dy * width * 0.5, hb, -(by + dx * width * 0.5)];
+    const rightB = [bx + dy * width * 0.5, hb, -(by - dx * width * 0.5)];
+    bucket.up(leftA, rightA, rightB, color);
+    bucket.up(leftA, rightB, leftB, color);
+  }
+
   _ribbon(bucket, pts, width, color, lift) {
     if (!pts || pts.length < 2) return;
+    const pad = Math.min(14, Math.max(5, width * 0.65));
     for (let i = 0; i < pts.length - 1; i += 1) {
       const span = this._roadSpan(pts[i], pts[i + 1]);
       if (!span) continue;
       const [a, b] = span;
-      let dx = b[0] - a[0];
-      let dy = b[1] - a[1];
-      const len = Math.hypot(dx, dy) || 1;
-      dx /= len;
-      dy /= len;
-      const ha = this._height(a[0], a[1]) + lift;
-      const hb = this._height(b[0], b[1]) + lift;
-      const leftA = [a[0] - dy * width * 0.5, ha, -(a[1] + dx * width * 0.5)];
-      const rightA = [a[0] + dy * width * 0.5, ha, -(a[1] - dx * width * 0.5)];
-      const leftB = [b[0] - dy * width * 0.5, hb, -(b[1] + dx * width * 0.5)];
-      const rightB = [b[0] + dy * width * 0.5, hb, -(b[1] - dx * width * 0.5)];
-      bucket.up(leftA, rightA, rightB, color);
-      bucket.up(leftA, rightB, leftB, color);
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len < 0.3) continue;
+      const pieces = Math.max(1, Math.ceil(len / 16));
+      for (let piece = 0; piece < pieces; piece += 1) {
+        const t0 = piece / pieces;
+        const t1 = (piece + 1) / pieces;
+        let ax = a[0] + (b[0] - a[0]) * t0;
+        let ay = a[1] + (b[1] - a[1]) * t0;
+        let bx = a[0] + (b[0] - a[0]) * t1;
+        let by = a[1] + (b[1] - a[1]) * t1;
+        const dx = bx - ax;
+        const dy = by - ay;
+        const step = Math.hypot(dx, dy) || 1;
+        if (piece === 0) {
+          ax -= (dx / step) * pad;
+          ay -= (dy / step) * pad;
+        }
+        if (piece === pieces - 1) {
+          bx += (dx / step) * pad;
+          by += (dy / step) * pad;
+        }
+        this._roadQuad(bucket, ax, ay, bx, by, width, color, lift);
+      }
     }
   }
 
