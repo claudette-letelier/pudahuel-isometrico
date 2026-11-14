@@ -393,15 +393,19 @@ export class IsoMap {
     for (const ring of city.parks || []) this._drape(ground, ring, park, 0.28);
     for (const ring of city.airport || []) this._drape(ground, ring, apron, 0.16);
     for (const street of city.streets || []) {
-      const pale = street.k <= 1 ? [0.99, 0.97, 0.9] : road;
-      this._ribbon(ground, street.p, WIDTHS[street.k] || 5, pale, 0.7);
+      const width = WIDTHS[street.k] || 5;
+      const pale = street.k <= 1 ? [0.9, 0.88, 0.82] : road;
+      this._ribbon(ground, street.p, width + 4.4, [0.8, 0.76, 0.67], 0.5);
+      this._ribbon(ground, street.p, width, pale, 0.66);
+      if (street.k <= 1) this._ribbon(ground, street.p, 1.7, [0.42, 0.52, 0.3], 0.74);
     }
-    for (const line of city.rails || []) this._ribbon(ground, line, 3.2, rail, 0.5);
+    for (const line of city.rails || []) this._ribbon(ground, line, 4.2, rail, 0.82);
     for (const line of city.runways || []) this._ribbon(ground, line, 14, [0.93, 0.91, 0.86], 0.4);
     for (const ring of city.water || []) this._drape(water, ring, blue, 0.22);
     for (const line of city.waterways || []) {
-      this._ribbon(ground, line, 36, [0.28, 0.4, 0.22], 0.16);
-      this._ribbon(water, line, 6, blue, 0.32);
+      this._ribbon(ground, line, 42, [0.3, 0.42, 0.24], 0.12);
+      this._ribbon(ground, line, 16, [0.72, 0.66, 0.52], 0.2);
+      this._ribbon(water, line, 5, blue, 0.3);
     }
     this.edge = this._edgeWall(city.boundary);
 
@@ -412,9 +416,12 @@ export class IsoMap {
       const wall = building.g ? [0.86, 0.88, 0.84] : WALL[building.r % 4];
       this._prism(built, building.p, base, building.h + 1.2, roof, wall);
     }
+    const patios = [[0.74, 0.67, 0.52], [0.68, 0.7, 0.48], [0.78, 0.72, 0.58]];
     for (const house of city.houses || []) {
-      const base = this._height(house.c[0], house.c[1]) - 0.8;
-      this._box(built, house.c[0], house.c[1], house.a, house.w, house.d, base, house.h + 0.8, ROOF[house.r % 4], WALL[house.r % 4]);
+      const groundY = this._height(house.c[0], house.c[1]);
+      const patio = patios[house.r % patios.length];
+      this._box(ground, house.c[0], house.c[1], house.a, house.w + 1.2, house.d + 8, groundY, 0.16, patio, patio);
+      this._box(built, house.c[0], house.c[1], house.a, house.w, house.d, groundY - 0.8, house.h + 0.8, ROOF[house.r % 4], WALL[house.r % 4]);
     }
 
     const flat = new THREE.MeshLambertMaterial({ vertexColors: true });
