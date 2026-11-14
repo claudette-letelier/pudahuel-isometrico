@@ -551,6 +551,56 @@ def merge_census_2024(blocks: list[dict], commune: list[list[int]]) -> list[dict
     return blocks
 
 
+def absorb_ml(commune, buildings, occupied) -> None:
+    path = RAW / "ms-pudahuel.jsonl"
+    if not path.exists():
+        print("sin huellas satelitales")
+        return
+    buckets: dict[tuple[int, int], list[tuple[float, float]]] = {}
+    for x, y in occupied:
+        buckets.setdefault((int(x // 18), int(y // 18)), []).append((x, y))
+
+    def taken(x: float, y: float) -> bool:
+        ix, iy = int(x // 18), int(y // 18)
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for px, py in buckets.get((ix + dx, iy + dy), ()):
+                    if (px - x) ** 2 + (py - y) ** 2 < 10 * 10:
+                        return True
+        return False
+
+    added = 0
+    with path.open(encoding="utf-8") as handle:
+     for line in handle:
+        if not line.strip():
+            continue
+        feature = json.loads(line)
+        geometry = feature.get("geometry") or {}
+        coords = geometry.get("coordinates") or []
+        ring = coords[0] if geometry.get("type") == "Polygon" else []
+        cleaned = clean([loc(lon, lat) for lon, lat in ring], 1.2, 10)
+        if not cleaned:
+            continue
+        area = abs(shoelace([(point[0], point[1]) for point in cleaned]))
+        if area < 18 or area > 4000:
+            continue
+        center = centroid(cleaned)
+        if not inside(center[0], center[1], commune) or taken(center[0], center[1]):
+            continue
+        floors = 1 if area < 140 else 2 if area < 450 else 3
+        buildings.append({
+            "p": cleaned,
+            "h": floors * 3.1,
+            "r": added % 4,
+            "g": 0,
+        })
+        buckets.setdefault((int(center[0] // 18), int(center[1] // 18)), []).append(center)
+        added += 1
+        if added >= 45000:
+            break
+    print(f"huellas satelitales: {added}")
+
+
 def absorb_rural(commune, buildings, occupied, cover) -> None:
     path = RAW / "rural.json"
     if not path.exists():
@@ -762,6 +812,7 @@ def main() -> None:
     for item in load_cover(RAW / "cl" / "minvu_pudahuel.geojson", commune, lambda _props: "park"):
         parks.append(item["p"])
     absorb_rural(commune, buildings, occupied, cover)
+    absorb_ml(commune, buildings, occupied)
     trees = scatter_trees(cover, parks, blocks)
     houses = generate_houses(blocks, occupied)
     scene = {

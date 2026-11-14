@@ -278,9 +278,84 @@ export class IsoMap {
     }
     const cast = this.cam.zoom >= 0.9;
     if (this.buildings) this.buildings.castShadow = cast;
-    this.renderer.render(this.scene, this.camera);
+    this._renderPixel();
     this._drawOverlay();
     this.dirty = false;
+  }
+
+  _setupPixel() {
+    if (this._pixelTarget) return;
+    const target = new THREE.WebGLRenderTarget(2, 2);
+    target.depthBuffer = true;
+    target.depthTexture = new THREE.DepthTexture();
+    target.depthTexture.type = THREE.UnsignedShortType;
+    target.texture.minFilter = THREE.NearestFilter;
+    target.texture.magFilter = THREE.NearestFilter;
+    target.texture.generateMipmaps = false;
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        tColor: { value: null },
+        tDepth: { value: null },
+        step: { value: new THREE.Vector2(1, 1) },
+        silhouette: { value: 0.0016 },
+        useOutline: { value: 1 },
+      },
+      vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }",
+      fragmentShader: `
+        uniform sampler2D tColor;
+        uniform sampler2D tDepth;
+        uniform vec2 step;
+        uniform float silhouette;
+        uniform float useOutline;
+        varying vec2 vUv;
+        float depthAt(vec2 uv) { return texture2D(tDepth, uv).r; }
+        void main() {
+          vec4 color = texture2D(tColor, vUv);
+          if (useOutline > 0.5 && color.a > 0.01) {
+            float here = depthAt(vUv);
+            float farther = max(
+              max(depthAt(vUv + vec2(step.x, 0.0)), depthAt(vUv - vec2(step.x, 0.0))),
+              max(depthAt(vUv + vec2(0.0, step.y)), depthAt(vUv - vec2(0.0, step.y)))
+            ) - here;
+            float crease = abs(depthAt(vUv + vec2(step.x, 0.0)) + depthAt(vUv - vec2(step.x, 0.0)) - 2.0 * here);
+            if (farther > silhouette) color.rgb *= 0.58;
+            else if (crease > silhouette * 0.45) color.rgb *= 0.8;
+          }
+          gl_FragColor = color;
+        }
+      `,
+    });
+    this._pixelTarget = target;
+    this._pixelMat = material;
+    this._pixelScene = new THREE.Scene();
+    this._pixelScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material));
+    this._pixelCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  }
+
+  _renderPixel() {
+    this._setupPixel();
+    const metres = this.metersPerPixel();
+    const block = Math.max(1, Math.min(4, Math.round(0.55 / Math.max(metres, 0.08))));
+    const outline = metres <= 2.2 ? 1 : 0;
+    if (block === 1 && outline === 0) {
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+    const width = Math.max(1, Math.floor(this.canvas.width / block));
+    const height = Math.max(1, Math.floor(this.canvas.height / block));
+    if (this._pixelTarget.width !== width || this._pixelTarget.height !== height) {
+      this._pixelTarget.setSize(width, height);
+    }
+    this.renderer.setRenderTarget(this._pixelTarget);
+    this.renderer.clear();
+    this.renderer.render(this.scene, this.camera);
+    this.renderer.setRenderTarget(null);
+    this._pixelMat.uniforms.tColor.value = this._pixelTarget.texture;
+    this._pixelMat.uniforms.tDepth.value = this._pixelTarget.depthTexture;
+    this._pixelMat.uniforms.step.value.set(1 / width, 1 / height);
+    this._pixelMat.uniforms.useOutline.value = outline;
+    this.renderer.render(this._pixelScene, this._pixelCam);
   }
 
   metersPerPixel() {
