@@ -42,6 +42,80 @@
       "group": "Ciudad"
     }
   ],
+  "sectors": [
+    {
+      "id": "casco",
+      "name": "1. Casco de Las Barrancas",
+      "summary": "Plaza, San Pablo y Teniente Cruz.",
+      "lon": -70.748,
+      "lat": -33.442,
+      "zoom": 2.2
+    },
+    {
+      "id": "sur",
+      "name": "2. Pudahuel Sur",
+      "summary": "La Estrella, Laguna Sur y el borde con Maipú.",
+      "lon": -70.748,
+      "lat": -33.458,
+      "zoom": 2
+    },
+    {
+      "id": "oriente",
+      "name": "3. Borde oriente",
+      "summary": "Barrancas, Vespucio y el límite con Lo Prado y Cerro Navia.",
+      "lon": -70.736,
+      "lat": -33.45,
+      "zoom": 1.7
+    },
+    {
+      "id": "norte",
+      "name": "4. Pudahuel Norte",
+      "summary": "El Arado, Noviciado y el camino a Lampa.",
+      "lon": -70.77,
+      "lat": -33.418,
+      "zoom": 1.7
+    },
+    {
+      "id": "industrial",
+      "name": "5. Industria e invernaderos",
+      "summary": "Galpones entre la ciudad y el aeropuerto.",
+      "lon": -70.778,
+      "lat": -33.412,
+      "zoom": 1.5
+    },
+    {
+      "id": "aeropuerto",
+      "name": "6. Aeropuerto",
+      "summary": "Pistas, terminal y el borde norte.",
+      "lon": -70.79,
+      "lat": -33.393,
+      "zoom": 1.25
+    },
+    {
+      "id": "valle",
+      "name": "7. Valle agrícola",
+      "summary": "Potreros entre el aeropuerto y los cerros.",
+      "lon": -70.85,
+      "lat": -33.42,
+      "zoom": 1.3
+    },
+    {
+      "id": "cerros",
+      "name": "8. Cerros del poniente",
+      "summary": "Cordillera de la costa, seca, con cultivos en las quebradas.",
+      "lon": -70.93,
+      "lat": -33.45,
+      "zoom": 1.15
+    },
+    {
+      "id": "caren",
+      "name": "9. Laguna Carén",
+      "summary": "Parque y campus de la Universidad de Chile.",
+      "lon": -70.839,
+      "lat": -33.437,
+      "zoom": 1.6
+    }
+  ],
   "tours": [
     {
       "id": "barrancas",

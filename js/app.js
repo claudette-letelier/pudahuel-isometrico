@@ -90,8 +90,31 @@ function renderLayers() {
   }
 }
 
+function toGrid(lon, lat) {
+  const [lon0, lat0] = map.city.origin;
+  const kx = 111320 * Math.cos((lat0 * Math.PI) / 180);
+  return [(lon - lon0) * kx, (lat - lat0) * 110950];
+}
+
 function renderTours() {
   toursEl.replaceChildren();
+  const sectorLabel = document.createElement("p");
+  sectorLabel.className = "group-label";
+  sectorLabel.textContent = "Sectores";
+  toursEl.append(sectorLabel);
+  for (const sector of state.catalog.sectors || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tour";
+    button.dataset.sector = sector.id;
+    button.innerHTML = `<strong>${sector.name}</strong><span>${sector.summary}</span>`;
+    button.addEventListener("click", () => openSector(sector));
+    toursEl.append(button);
+  }
+  const tourLabel = document.createElement("p");
+  tourLabel.className = "group-label";
+  tourLabel.textContent = "Recorridos";
+  toursEl.append(tourLabel);
   for (const tour of state.catalog.tours) {
     const stops = tour.stops
       .map((id) => state.catalog.places.find((place) => place.id === id))
@@ -108,6 +131,16 @@ function renderTours() {
 
 let tourStops = [];
 let tourIndex = 0;
+
+function openSector(sector) {
+  showPlace(null, false);
+  const [x, y] = toGrid(sector.lon, sector.lat);
+  map.focus(x, y, sector.zoom);
+  history.replaceState(null, "", `#sector-${sector.id}`);
+  for (const button of toursEl.querySelectorAll("[data-sector]")) {
+    button.classList.toggle("is-on", button.dataset.sector === sector.id);
+  }
+}
 
 function startTour(stops) {
   tourStops = stops;
@@ -132,6 +165,7 @@ function showPlace(id, move) {
   }
   const place = state.catalog.places.find((item) => item.id === id);
   if (!place) return;
+  for (const button of toursEl.querySelectorAll("[data-sector]")) button.classList.remove("is-on");
   state.enabled.add(place.layer);
   document.querySelector("#card-kicker").textContent = state.catalog.layers.find((layer) => layer.id === place.layer)?.name || "";
   document.querySelector("#card-title").textContent = place.name;
@@ -220,7 +254,7 @@ frame();
 
 const [city, catalog] = await Promise.all([
   fetch("data/scene.json").then((response) => response.json()),
-  fetch("data/places.json").then((response) => response.json()),
+  fetch("data/places.json?v=2").then((response) => response.json()),
 ]);
 
 state.catalog = catalog;
@@ -233,4 +267,12 @@ renderLayers();
 renderTours();
 statusEl.textContent = `${city.meta.buildings.toLocaleString("es-CL")} edificios · censos 2017 y 2024, SRTM y OpenStreetMap`;
 const hash = location.hash.replace("#", "");
-if (hash) showPlace(hash, true);
+const sector = hash.startsWith("sector-")
+  ? (catalog.sectors || []).find((item) => item.id === hash.slice(7))
+  : null;
+if (sector) {
+  setTab("recorridos");
+  openSector(sector);
+} else if (hash) {
+  showPlace(hash, true);
+}

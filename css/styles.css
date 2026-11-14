@@ -128,7 +128,7 @@ button { cursor: pointer; }
   padding: 8px 10px;
   display: block;
 }
-.place:hover, .tour:hover, .place.is-on { background: rgba(255, 255, 255, 0.05); }
+.place:hover, .tour:hover, .place.is-on, .tour.is-on { background: rgba(255, 255, 255, 0.05); }
 .place strong, .tour strong { display: block; font-weight: 500; }
 .place span, .tour span { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
 .prose { padding: 6px 8px 20px; color: #d5dbe3; font-size: 14.5px; line-height: 1.5; }
